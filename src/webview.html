@@ -1362,6 +1362,99 @@
         .vscode-button:active {
             background: hsl(220, 9%, 36%);
         }
+        
+        /* Structure Alignment Controls */
+        .structure-alignment-controls {
+            margin: 15px 0;
+            padding: 10px 0;
+            border-top: 1px solid #ddd;
+        }
+        
+        .structure-alignment-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .structure-alignment-header h3 {
+            margin: 0;
+            font-size: 16px;
+            color: hsl(220, 9%, 46%);
+        }
+        
+        .structure-alignment-content {
+            display: block;
+        }
+        
+        .alignment-control-group {
+            margin-bottom: 10px;
+        }
+        
+        .alignment-stats div {
+            margin-bottom: 5px;
+        }
+        
+        .structure-toggle-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px;
+            border-radius: 4px;
+            transition: background 0.2s ease;
+        }
+        
+        .structure-toggle-item:hover {
+            background: hsl(210, 40%, 98%);
+        }
+        
+        .structure-toggle-item input[type="checkbox"] {
+            margin: 0;
+        }
+        
+        .structure-toggle-item label {
+            cursor: pointer;
+            font-size: 12px;
+            color: hsl(220, 9%, 46%);
+            flex: 1;
+        }
+        
+        .sequence-alignment-display {
+            user-select: text;
+        }
+        
+        .sequence-alignment-line {
+            margin-bottom: 2px;
+            padding: 2px 0;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        
+        .sequence-alignment-line:hover {
+            background: hsl(210, 40%, 98%);
+        }
+        
+        .sequence-alignment-line.highlighted {
+            background: hsl(220, 9%, 91%);
+        }
+        
+        .conserved-residue {
+            background: #90EE90;
+            color: #000;
+            padding: 1px 2px;
+            border-radius: 2px;
+        }
+        
+        .variable-residue {
+            background: #FFB6C1;
+            color: #000;
+            padding: 1px 2px;
+            border-radius: 2px;
+        }
+        
+        .gap-residue {
+            color: #999;
+        }
     </style>
 </head>
 <body>
@@ -1557,6 +1650,62 @@
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Structure Alignment Controls -->
+            <div class="structure-alignment-controls">
+                <div class="structure-alignment-header">
+                    <h3>Structure Alignment</h3>
+                </div>
+                
+                <div id="structure-alignment-content" class="structure-alignment-content">
+                    <div class="alignment-info" style="font-size: 12px; color: hsl(220, 9%, 46%); margin-bottom: 10px;">
+                        Align multiple structures and identify conserved regions for cross-reactive binder design.
+                    </div>
+                    
+                    <!-- Reference Structure Selection -->
+                    <div class="alignment-control-group">
+                        <label for="reference-structure-select" style="display: block; margin-bottom: 5px; font-size: 13px; color: hsl(220, 9%, 46%);">Reference Structure:</label>
+                        <select id="reference-structure-select" style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                            <option value="">Select reference structure...</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Alignment Button -->
+                    <button id="align-structures-btn" class="vscode-button" style="width: 100%; margin-top: 10px; margin-bottom: 10px;" disabled>
+                        Align Structures
+                    </button>
+                    
+                    <!-- Alignment Results Section -->
+                    <div id="alignment-results-section" style="display: none;">
+                        <div class="alignment-stats" style="margin-bottom: 10px; padding: 8px; background: hsl(210, 40%, 98%); border-radius: 4px; font-size: 12px;">
+                            <div><strong>RMSD:</strong> <span id="alignment-rmsd">-</span> Å</div>
+                            <div><strong>Conserved Residues:</strong> <span id="conserved-count">-</span></div>
+                            <div><strong>Variable Residues:</strong> <span id="variable-count">-</span></div>
+                        </div>
+                        
+                        <!-- Structure Toggle Controls -->
+                        <div class="structure-toggle-controls" style="margin-bottom: 10px;">
+                            <h4 style="font-size: 13px; margin-bottom: 5px; color: hsl(220, 9%, 46%);">Show/Hide Structures:</h4>
+                            <div id="structure-toggle-list" style="display: flex; flex-direction: column; gap: 5px;">
+                                <!-- Structure toggles will be populated here -->
+                            </div>
+                        </div>
+                        
+                        <!-- Export Button -->
+                        <button id="export-conservation-btn" class="vscode-button" style="width: 100%; margin-bottom: 10px;">
+                            Export Conservation Analysis
+                        </button>
+                    </div>
+                    
+                    <!-- Sequence Alignment View -->
+                    <div id="sequence-alignment-view" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">
+                        <h4 style="font-size: 13px; margin-bottom: 10px; color: hsl(220, 9%, 46%);">Sequence Alignment:</h4>
+                        <div id="sequence-alignment-display" style="font-family: 'Courier New', monospace; font-size: 11px; background: hsl(0, 0%, 100%); border: 1px solid #ddd; border-radius: 4px; padding: 10px; max-height: 300px; overflow-y: auto; line-height: 1.4;">
+                            <!-- Sequence alignment will be displayed here -->
                         </div>
                     </div>
                 </div>
@@ -2214,6 +2363,7 @@
             }
             
             updateFileHistory();
+            updateReferenceStructureDropdown();
             document.getElementById('animation-controls').style.display = 'none';
             document.getElementById('atom-count').textContent = '0';
         }
@@ -2312,6 +2462,11 @@
             return parseInt(hex.replace('#', ''), 16);
         }
         
+        // Structure alignment variables
+        let alignmentData = null; // Store alignment results
+        let alignedStructures = []; // Store aligned structure data
+        let structureVisibility = new Map(); // Track structure visibility
+        
         // Sequence alignment variables
         let sequenceAlignmentEnabled = false;
         let currentInputMode = 'fasta'; // 'fasta' or 'single'
@@ -2352,6 +2507,355 @@
                 if(nn) return nn;
             }
             return ax.length - bx.length;
+        }
+
+        // ========== Structure Alignment Functions ==========
+        
+        // Extract sequence from PDB file
+        function extractSequenceFromPDB(pdbContent) {
+            const lines = pdbContent.split('\n');
+            const sequence = [];
+            const residueMap = new Map(); // Map residue number to residue name
+            
+            for (const line of lines) {
+                if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+                    const residueName = line.substring(17, 20).trim();
+                    const residueNumber = parseInt(line.substring(22, 26).trim());
+                    const chainId = line.substring(21, 22).trim();
+                    
+                    if (!residueMap.has(residueNumber)) {
+                        residueMap.set(residueNumber, { name: residueName, chain: chainId });
+                    }
+                }
+            }
+            
+            // Convert residue names to single letter codes
+            const threeToOne = {
+                'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
+                'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
+                'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
+                'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V',
+                'ASX': 'B', 'GLX': 'Z', 'XAA': 'X', 'UNK': 'X'
+            };
+            
+            const sortedResidues = Array.from(residueMap.entries()).sort((a, b) => a[0] - b[0]);
+            for (const [num, data] of sortedResidues) {
+                const oneLetter = threeToOne[data.name] || 'X';
+                sequence.push({ residue: oneLetter, number: num, chain: data.chain, name: data.name });
+            }
+            
+            return sequence;
+        }
+        
+        // Extract sequence from mmCIF file
+        function extractSequenceFromCIF(cifContent) {
+            const lines = cifContent.split('\n');
+            const sequence = [];
+            const residueMap = new Map();
+            let inAtomSite = false;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line.startsWith('_atom_site.')) {
+                    inAtomSite = true;
+                    continue;
+                }
+                if (inAtomSite && line && !line.startsWith('#')) {
+                    const fields = line.split(/\s+/);
+                    if (fields.length >= 4) {
+                        const residueName = fields[3];
+                        const residueNumber = parseInt(fields[4]);
+                        const chainId = fields[5] || 'A';
+                        
+                        if (!isNaN(residueNumber) && !residueMap.has(residueNumber)) {
+                            residueMap.set(residueNumber, { name: residueName, chain: chainId });
+                        }
+                    }
+                }
+            }
+            
+            const threeToOne = {
+                'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
+                'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
+                'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
+                'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V',
+                'ASX': 'B', 'GLX': 'Z', 'XAA': 'X', 'UNK': 'X'
+            };
+            
+            const sortedResidues = Array.from(residueMap.entries()).sort((a, b) => a[0] - b[0]);
+            for (const [num, data] of sortedResidues) {
+                const oneLetter = threeToOne[data.name] || 'X';
+                sequence.push({ residue: oneLetter, number: num, chain: data.chain, name: data.name });
+            }
+            
+            return sequence;
+        }
+        
+        // Needleman-Wunsch global sequence alignment
+        function needlemanWunsch(seq1, seq2, matchScore = 1, mismatchScore = -1, gapPenalty = -1) {
+            const n = seq1.length;
+            const m = seq2.length;
+            
+            // Initialize scoring matrix
+            const score = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
+            const traceback = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
+            
+            // Initialize first row and column
+            for (let i = 1; i <= n; i++) {
+                score[i][0] = i * gapPenalty;
+                traceback[i][0] = 1; // Up
+            }
+            for (let j = 1; j <= m; j++) {
+                score[0][j] = j * gapPenalty;
+                traceback[0][j] = 2; // Left
+            }
+            
+            // Fill scoring matrix
+            for (let i = 1; i <= n; i++) {
+                for (let j = 1; j <= m; j++) {
+                    const match = (seq1[i - 1] === seq2[j - 1]) ? matchScore : mismatchScore;
+                    const diag = score[i - 1][j - 1] + match;
+                    const up = score[i - 1][j] + gapPenalty;
+                    const left = score[i][j - 1] + gapPenalty;
+                    
+                    const max = Math.max(diag, up, left);
+                    score[i][j] = max;
+                    
+                    if (max === diag) {
+                        traceback[i][j] = 0; // Diagonal
+                    } else if (max === up) {
+                        traceback[i][j] = 1; // Up
+                    } else {
+                        traceback[i][j] = 2; // Left
+                    }
+                }
+            }
+            
+            // Traceback
+            let i = n, j = m;
+            const aligned1 = [];
+            const aligned2 = [];
+            
+            while (i > 0 || j > 0) {
+                if (traceback[i][j] === 0) {
+                    aligned1.unshift(seq1[i - 1]);
+                    aligned2.unshift(seq2[j - 1]);
+                    i--;
+                    j--;
+                } else if (traceback[i][j] === 1) {
+                    aligned1.unshift(seq1[i - 1]);
+                    aligned2.unshift('-');
+                    i--;
+                } else {
+                    aligned1.unshift('-');
+                    aligned2.unshift(seq2[j - 1]);
+                    j--;
+                }
+            }
+            
+            return {
+                aligned1: aligned1.join(''),
+                aligned2: aligned2.join(''),
+                score: score[n][m]
+            };
+        }
+        
+        // Extract CA atoms from PDB
+        function extractCAAtoms(pdbContent) {
+            const lines = pdbContent.split('\n');
+            const atoms = [];
+            
+            for (const line of lines) {
+                if (line.startsWith('ATOM') && line.substring(12, 16).trim() === 'CA') {
+                    const x = parseFloat(line.substring(30, 38));
+                    const y = parseFloat(line.substring(38, 46));
+                    const z = parseFloat(line.substring(46, 54));
+                    const residueNumber = parseInt(line.substring(22, 26).trim());
+                    const chainId = line.substring(21, 22).trim();
+                    
+                    if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+                        atoms.push({
+                            x, y, z,
+                            residueNumber,
+                            chainId
+                        });
+                    }
+                }
+            }
+            
+            return atoms;
+        }
+        
+        // Extract CA atoms from mmCIF
+        function extractCAAtomsFromCIF(cifContent) {
+            const lines = cifContent.split('\n');
+            const atoms = [];
+            let inAtomSite = false;
+            let labelAtomIdIdx = -1, labelCompIdIdx = -1, labelAsymIdIdx = -1, labelSeqIdIdx = -1;
+            let CartnXIdx = -1, CartnYIdx = -1, CartnZIdx = -1;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line.startsWith('_atom_site.')) {
+                    inAtomSite = true;
+                    const field = line.split('.')[1].split(/\s+/)[0];
+                    if (field === 'label_atom_id') labelAtomIdIdx = i;
+                    else if (field === 'label_comp_id') labelCompIdIdx = i;
+                    else if (field === 'label_asym_id') labelAsymIdIdx = i;
+                    else if (field === 'label_seq_id') labelSeqIdIdx = i;
+                    else if (field === 'Cartn_x') CartnXIdx = i;
+                    else if (field === 'Cartn_y') CartnYIdx = i;
+                    else if (field === 'Cartn_z') CartnZIdx = i;
+                    continue;
+                }
+                if (inAtomSite && line && !line.startsWith('#') && labelAtomIdIdx >= 0) {
+                    const fields = line.split(/\s+/);
+                    const atomId = fields[labelAtomIdIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)];
+                    if (atomId === 'CA') {
+                        const x = parseFloat(fields[CartnXIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)]);
+                        const y = parseFloat(fields[CartnYIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)]);
+                        const z = parseFloat(fields[CartnZIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)]);
+                        const residueNumber = parseInt(fields[labelSeqIdIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)]);
+                        const chainId = fields[labelAsymIdIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)] || 'A';
+                        
+                        if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !isNaN(residueNumber)) {
+                            atoms.push({ x, y, z, residueNumber, chainId });
+                        }
+                    }
+                }
+            }
+            
+            return atoms;
+        }
+        
+        // Kabsch algorithm for optimal rotation matrix
+        function kabschAlgorithm(P, Q) {
+            // Center the point sets
+            const n = P.length;
+            const centroidP = { x: 0, y: 0, z: 0 };
+            const centroidQ = { x: 0, y: 0, z: 0 };
+            
+            for (let i = 0; i < n; i++) {
+                centroidP.x += P[i].x;
+                centroidP.y += P[i].y;
+                centroidP.z += P[i].z;
+                centroidQ.x += Q[i].x;
+                centroidQ.y += Q[i].y;
+                centroidQ.z += Q[i].z;
+            }
+            
+            centroidP.x /= n;
+            centroidP.y /= n;
+            centroidP.z /= n;
+            centroidQ.x /= n;
+            centroidQ.y /= n;
+            centroidQ.z /= n;
+            
+            // Center the points
+            const P_centered = P.map(p => ({
+                x: p.x - centroidP.x,
+                y: p.y - centroidP.y,
+                z: p.z - centroidP.z
+            }));
+            const Q_centered = Q.map(q => ({
+                x: q.x - centroidQ.x,
+                y: q.y - centroidQ.y,
+                z: q.z - centroidQ.z
+            }));
+            
+            // Compute covariance matrix
+            const H = [
+                [0, 0, 0],
+                [0, 0, 0],
+                [0, 0, 0]
+            ];
+            
+            for (let i = 0; i < n; i++) {
+                H[0][0] += P_centered[i].x * Q_centered[i].x;
+                H[0][1] += P_centered[i].x * Q_centered[i].y;
+                H[0][2] += P_centered[i].x * Q_centered[i].z;
+                H[1][0] += P_centered[i].y * Q_centered[i].x;
+                H[1][1] += P_centered[i].y * Q_centered[i].y;
+                H[1][2] += P_centered[i].y * Q_centered[i].z;
+                H[2][0] += P_centered[i].z * Q_centered[i].x;
+                H[2][1] += P_centered[i].z * Q_centered[i].y;
+                H[2][2] += P_centered[i].z * Q_centered[i].z;
+            }
+            
+            // SVD (simplified version - using Jacobi method approximation)
+            // For simplicity, we'll use a basic rotation matrix calculation
+            // In production, use a proper SVD library
+            const R = computeRotationMatrix(H);
+            
+            return {
+                rotation: R,
+                translation: {
+                    x: centroidQ.x - (R[0][0] * centroidP.x + R[0][1] * centroidP.y + R[0][2] * centroidP.z),
+                    y: centroidQ.y - (R[1][0] * centroidP.x + R[1][1] * centroidP.y + R[1][2] * centroidP.z),
+                    z: centroidQ.z - (R[2][0] * centroidP.x + R[2][1] * centroidP.y + R[2][2] * centroidP.z)
+                }
+            };
+        }
+        
+        // Simplified rotation matrix computation (for Kabsch)
+        function computeRotationMatrix(H) {
+            // This is a simplified version - for production, use proper SVD
+            // Using cross-covariance matrix approach
+            const trace = H[0][0] + H[1][1] + H[2][2];
+            const det = H[0][0] * (H[1][1] * H[2][2] - H[2][1] * H[1][2]) -
+                       H[0][1] * (H[1][0] * H[2][2] - H[2][0] * H[1][2]) +
+                       H[0][2] * (H[1][0] * H[2][1] - H[2][0] * H[1][1]);
+            
+            // Use quaternion-based method for better stability
+            const A = [
+                [H[0][0] + H[1][1] + H[2][2], H[2][1] - H[1][2], H[0][2] - H[2][0], H[1][0] - H[0][1]],
+                [H[2][1] - H[1][2], H[0][0] - H[1][1] - H[2][2], H[0][1] + H[1][0], H[0][2] + H[2][0]],
+                [H[0][2] - H[2][0], H[0][1] + H[1][0], H[1][1] - H[0][0] - H[2][2], H[1][2] + H[2][1]],
+                [H[1][0] - H[0][1], H[0][2] + H[2][0], H[1][2] + H[2][1], H[2][2] - H[0][0] - H[1][1]]
+            ];
+            
+            // Find largest eigenvalue (simplified - use power method)
+            let eigenvector = [1, 0, 0, 0];
+            for (let iter = 0; iter < 10; iter++) {
+                const newVec = [
+                    A[0][0] * eigenvector[0] + A[0][1] * eigenvector[1] + A[0][2] * eigenvector[2] + A[0][3] * eigenvector[3],
+                    A[1][0] * eigenvector[0] + A[1][1] * eigenvector[1] + A[1][2] * eigenvector[2] + A[1][3] * eigenvector[3],
+                    A[2][0] * eigenvector[0] + A[2][1] * eigenvector[1] + A[2][2] * eigenvector[2] + A[2][3] * eigenvector[3],
+                    A[3][0] * eigenvector[0] + A[3][1] * eigenvector[1] + A[3][2] * eigenvector[2] + A[3][3] * eigenvector[3]
+                ];
+                const norm = Math.sqrt(newVec[0]**2 + newVec[1]**2 + newVec[2]**2 + newVec[3]**2);
+                eigenvector = newVec.map(v => v / norm);
+            }
+            
+            // Convert quaternion to rotation matrix
+            const [w, x, y, z] = eigenvector;
+            return [
+                [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
+                [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+                [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)]
+            ];
+        }
+        
+        // Calculate RMSD
+        function calculateRMSD(P, Q) {
+            if (P.length !== Q.length) return Infinity;
+            let sumSqDiff = 0;
+            for (let i = 0; i < P.length; i++) {
+                const dx = P[i].x - Q[i].x;
+                const dy = P[i].y - Q[i].y;
+                const dz = P[i].z - Q[i].z;
+                sumSqDiff += dx*dx + dy*dy + dz*dz;
+            }
+            return Math.sqrt(sumSqDiff / P.length);
+        }
+        
+        // Apply transformation to coordinates
+        function applyTransformation(coords, rotation, translation) {
+            return coords.map(coord => ({
+                x: rotation[0][0] * coord.x + rotation[0][1] * coord.y + rotation[0][2] * coord.z + translation.x,
+                y: rotation[1][0] * coord.x + rotation[1][1] * coord.y + rotation[1][2] * coord.z + translation.y,
+                z: rotation[2][0] * coord.x + rotation[2][1] * coord.y + rotation[2][2] * coord.z + translation.z
+            }));
         }
 
         // Helper Function to Read File
@@ -2562,6 +3066,14 @@
             document.getElementById('seq-only-radio').addEventListener('change', handleDisplayModeChange);
             document.getElementById('align-mode-radio').addEventListener('change', handleDisplayModeChange);
             document.getElementById('plddt-info-toggle').addEventListener('change', togglePLDDTInfo);
+            
+            // Structure alignment event listeners
+            document.getElementById('reference-structure-select').addEventListener('change', updateAlignmentButtonState);
+            document.getElementById('align-structures-btn').addEventListener('click', performStructureAlignment);
+            document.getElementById('export-conservation-btn').addEventListener('click', exportConservationAnalysis);
+            
+            // Update reference structure dropdown when files are loaded
+            updateReferenceStructureDropdown();
 
             // --- Collapse Button Listeners ---
             const toggleButton = document.getElementById('toggle-file-list');
@@ -4406,6 +4918,7 @@
                     }
                     
                     updateFileHistory(); // Update highlighting
+                    updateReferenceStructureDropdown(); // Update alignment dropdown
 
                     const diffusionIndex = diffusionSteps.findIndex(step => step.name === file.name);
                     if (diffusionIndex !== -1) {
@@ -4976,6 +5489,472 @@
             } catch (error) {
                 console.error('Error displaying sequence structure:', error);
             }
+        }
+        
+        // ========== Structure Alignment UI Functions ==========
+        
+        // Update reference structure dropdown
+        function updateReferenceStructureDropdown() {
+            const select = document.getElementById('reference-structure-select');
+            const currentValue = select.value;
+            select.innerHTML = '<option value="">Select reference structure...</option>';
+            
+            loadedFiles.forEach((file, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = file.name;
+                if (index.toString() === currentValue) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+            
+            updateAlignmentButtonState();
+        }
+        
+        // Update alignment button state
+        function updateAlignmentButtonState() {
+            const select = document.getElementById('reference-structure-select');
+            const alignBtn = document.getElementById('align-structures-btn');
+            const hasReference = select.value !== '' && select.value !== null;
+            const hasMultipleFiles = loadedFiles.length >= 2;
+            alignBtn.disabled = !hasReference || !hasMultipleFiles;
+        }
+        
+        // Main structure alignment function
+        async function performStructureAlignment() {
+            const referenceIndex = parseInt(document.getElementById('reference-structure-select').value);
+            if (isNaN(referenceIndex) || referenceIndex < 0 || referenceIndex >= loadedFiles.length) {
+                alert('Please select a valid reference structure.');
+                return;
+            }
+            
+            if (loadedFiles.length < 2) {
+                alert('Please load at least 2 structures for alignment.');
+                return;
+            }
+            
+            const referenceFile = loadedFiles[referenceIndex];
+            const otherFiles = loadedFiles.filter((_, idx) => idx !== referenceIndex);
+            
+            try {
+                // Show loading indicator
+                const alignBtn = document.getElementById('align-structures-btn');
+                alignBtn.disabled = true;
+                alignBtn.textContent = 'Aligning...';
+                
+                // Extract sequences and CA atoms from reference
+                let refSequence, refCAAtoms;
+                if (referenceFile.format === 'mmcif' || referenceFile.format === 'cif') {
+                    refSequence = extractSequenceFromCIF(referenceFile.data);
+                    refCAAtoms = extractCAAtomsFromCIF(referenceFile.data);
+                } else {
+                    refSequence = extractSequenceFromPDB(referenceFile.data);
+                    refCAAtoms = extractCAAtoms(referenceFile.data);
+                }
+                
+                const refSeqString = refSequence.map(s => s.residue).join('');
+                
+                // Store alignment results
+                alignmentData = {
+                    reference: {
+                        file: referenceFile,
+                        sequence: refSequence,
+                        seqString: refSeqString,
+                        caAtoms: refCAAtoms,
+                        index: referenceIndex
+                    },
+                    aligned: []
+                };
+                
+                // Align each structure to reference
+                for (const file of otherFiles) {
+                    let seq, caAtoms;
+                    if (file.format === 'mmcif' || file.format === 'cif') {
+                        seq = extractSequenceFromCIF(file.data);
+                        caAtoms = extractCAAtomsFromCIF(file.data);
+                    } else {
+                        seq = extractSequenceFromPDB(file.data);
+                        caAtoms = extractCAAtoms(file.data);
+                    }
+                    
+                    const seqString = seq.map(s => s.residue).join('');
+                    
+                    // Perform sequence alignment
+                    const seqAlignment = needlemanWunsch(refSeqString, seqString);
+                    
+                    // Map aligned sequences to CA atoms
+                    const alignedCA = mapAlignedSequencesToAtoms(
+                        refCAAtoms, caAtoms, 
+                        seqAlignment.aligned1, seqAlignment.aligned2,
+                        refSequence, seq
+                    );
+                    
+                    // Perform structural alignment using Kabsch
+                    const transformation = kabschAlgorithm(alignedCA.ref, alignedCA.query);
+                    const transformedAtoms = applyTransformation(caAtoms, transformation.rotation, transformation.translation);
+                    
+                    // Calculate RMSD on aligned residues
+                    const rmsd = calculateRMSD(alignedCA.ref, alignedCA.query);
+                    
+                    // Identify conserved regions (100% sequence identity)
+                    const conservation = identifyConservedRegions(
+                        seqAlignment.aligned1, 
+                        seqAlignment.aligned2
+                    );
+                    
+                    alignmentData.aligned.push({
+                        file: file,
+                        sequence: seq,
+                        seqString: seqString,
+                        caAtoms: caAtoms,
+                        transformedAtoms: transformedAtoms,
+                        transformation: transformation,
+                        sequenceAlignment: seqAlignment,
+                        rmsd: rmsd,
+                        conservation: conservation,
+                        alignedCA: alignedCA
+                    });
+                }
+                
+                // Visualize aligned structures
+                await visualizeAlignedStructures();
+                
+                // Display results
+                displayAlignmentResults();
+                
+                // Display sequence alignment
+                displaySequenceAlignment();
+                
+            } catch (error) {
+                console.error('Alignment error:', error);
+                alert('Error during alignment: ' + error.message);
+            } finally {
+                const alignBtn = document.getElementById('align-structures-btn');
+                alignBtn.disabled = false;
+                alignBtn.textContent = 'Align Structures';
+            }
+        }
+        
+        // Map aligned sequences to CA atoms
+        function mapAlignedSequencesToAtoms(refCA, queryCA, alignedRef, alignedQuery, refSeq, querySeq) {
+            const refAligned = [];
+            const queryAligned = [];
+            let refIdx = 0;
+            let queryIdx = 0;
+            
+            for (let i = 0; i < alignedRef.length; i++) {
+                if (alignedRef[i] !== '-') {
+                    if (refIdx < refCA.length) {
+                        refAligned.push(refCA[refIdx]);
+                    }
+                    refIdx++;
+                } else {
+                    refAligned.push(null); // Gap in reference
+                }
+                
+                if (alignedQuery[i] !== '-') {
+                    if (queryIdx < queryCA.length) {
+                        queryAligned.push(queryCA[queryIdx]);
+                    }
+                    queryIdx++;
+                } else {
+                    queryAligned.push(null); // Gap in query
+                }
+            }
+            
+            // Filter out gaps
+            const refFiltered = [];
+            const queryFiltered = [];
+            for (let i = 0; i < refAligned.length; i++) {
+                if (refAligned[i] !== null && queryAligned[i] !== null) {
+                    refFiltered.push(refAligned[i]);
+                    queryFiltered.push(queryAligned[i]);
+                }
+            }
+            
+            return { ref: refFiltered, query: queryFiltered };
+        }
+        
+        // Identify conserved regions (100% sequence identity)
+        function identifyConservedRegions(aligned1, aligned2) {
+            const conservation = [];
+            for (let i = 0; i < aligned1.length; i++) {
+                const isConserved = aligned1[i] !== '-' && aligned2[i] !== '-' && aligned1[i] === aligned2[i];
+                conservation.push({
+                    position: i,
+                    conserved: isConserved,
+                    refResidue: aligned1[i],
+                    queryResidue: aligned2[i]
+                });
+            }
+            return conservation;
+        }
+        
+        // Visualize aligned structures in Molstar
+        async function visualizeAlignedStructures() {
+            if (!viewer || !alignmentData) return;
+            
+            await viewer.plugin.clear();
+            alignedStructures = [];
+            structureVisibility.clear();
+            
+            const plugin = viewer.plugin;
+            
+            // Load reference structure
+            const refBlob = new Blob([alignmentData.reference.file.data], { type: 'text/plain' });
+            const refUrl = URL.createObjectURL(refBlob);
+            const refData = await plugin.builders.data.download({ url: refUrl, isBinary: false });
+            const refTrajectory = await plugin.builders.structure.parseTrajectory(refData, alignmentData.reference.file.format);
+            const refStructure = await plugin.builders.structure.hierarchy.applyPreset(refTrajectory, 'default');
+            URL.revokeObjectURL(refUrl);
+            
+            alignedStructures.push({
+                name: alignmentData.reference.file.name,
+                structure: refStructure,
+                isReference: true,
+                visible: true
+            });
+            structureVisibility.set(alignmentData.reference.file.name, true);
+            
+            // Load and transform aligned structures
+            for (const aligned of alignmentData.aligned) {
+                // Create transformed PDB content
+                const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
+                
+                const blob = new Blob([transformedPDB], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const data = await plugin.builders.data.download({ url: url, isBinary: false });
+                const trajectory = await plugin.builders.structure.parseTrajectory(data, aligned.file.format);
+                const structure = await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
+                URL.revokeObjectURL(url);
+                
+                alignedStructures.push({
+                    name: aligned.file.name,
+                    structure: structure,
+                    isReference: false,
+                    visible: true,
+                    conservation: aligned.conservation
+                });
+                structureVisibility.set(aligned.file.name, true);
+            }
+            
+            // Update structure toggle controls
+            updateStructureToggleControls();
+        }
+        
+        // Create transformed PDB content
+        function createTransformedPDB(originalContent, transformation, format) {
+            if (format === 'mmcif' || format === 'cif') {
+                return createTransformedCIF(originalContent, transformation);
+            } else {
+                return createTransformedPDBFile(originalContent, transformation);
+            }
+        }
+        
+        // Create transformed PDB file
+        function createTransformedPDBFile(pdbContent, transformation) {
+            const lines = pdbContent.split('\n');
+            const transformed = [];
+            
+            for (const line of lines) {
+                if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+                    const x = parseFloat(line.substring(30, 38));
+                    const y = parseFloat(line.substring(38, 46));
+                    const z = parseFloat(line.substring(46, 54));
+                    
+                    if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+                        const transformedCoords = applyTransformation(
+                            [{ x, y, z }], 
+                            transformation.rotation, 
+                            transformation.translation
+                        )[0];
+                        
+                        const newLine = line.substring(0, 30) + 
+                                      String(transformedCoords.x.toFixed(3)).padStart(8) +
+                                      String(transformedCoords.y.toFixed(3)).padStart(8) +
+                                      String(transformedCoords.z.toFixed(3)).padStart(8) +
+                                      line.substring(54);
+                        transformed.push(newLine);
+                    } else {
+                        transformed.push(line);
+                    }
+                } else {
+                    transformed.push(line);
+                }
+            }
+            
+            return transformed.join('\n');
+        }
+        
+        // Create transformed CIF file (simplified - would need proper CIF parsing)
+        function createTransformedCIF(cifContent, transformation) {
+            // For now, return original - full CIF transformation would require more complex parsing
+            return cifContent;
+        }
+        
+        // Display alignment results
+        function displayAlignmentResults() {
+            const resultsSection = document.getElementById('alignment-results-section');
+            resultsSection.style.display = 'block';
+            
+            // Calculate average RMSD
+            const avgRMSD = alignmentData.aligned.reduce((sum, a) => sum + a.rmsd, 0) / alignmentData.aligned.length;
+            document.getElementById('alignment-rmsd').textContent = avgRMSD.toFixed(2);
+            
+            // Count conserved and variable residues
+            let conservedCount = 0;
+            let variableCount = 0;
+            
+            alignmentData.aligned.forEach(aligned => {
+                aligned.conservation.forEach(cons => {
+                    if (cons.conserved) conservedCount++;
+                    else if (cons.refResidue !== '-' && cons.queryResidue !== '-') variableCount++;
+                });
+            });
+            
+            // Average across all alignments
+            conservedCount = Math.round(conservedCount / alignmentData.aligned.length);
+            variableCount = Math.round(variableCount / alignmentData.aligned.length);
+            
+            document.getElementById('conserved-count').textContent = conservedCount;
+            document.getElementById('variable-count').textContent = variableCount;
+        }
+        
+        // Update structure toggle controls
+        function updateStructureToggleControls() {
+            const toggleList = document.getElementById('structure-toggle-list');
+            toggleList.innerHTML = '';
+            
+            alignedStructures.forEach((struct, index) => {
+                const toggleItem = document.createElement('div');
+                toggleItem.className = 'structure-toggle-item';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `toggle-struct-${index}`;
+                checkbox.checked = structureVisibility.get(struct.name) !== false;
+                checkbox.addEventListener('change', () => {
+                    structureVisibility.set(struct.name, checkbox.checked);
+                    toggleStructureVisibility(struct.name, checkbox.checked);
+                });
+                
+                const label = document.createElement('label');
+                label.htmlFor = `toggle-struct-${index}`;
+                label.textContent = struct.name + (struct.isReference ? ' (Reference)' : '');
+                
+                toggleItem.appendChild(checkbox);
+                toggleItem.appendChild(label);
+                toggleList.appendChild(toggleItem);
+            });
+        }
+        
+        // Toggle structure visibility
+        async function toggleStructureVisibility(name, visible) {
+            const struct = alignedStructures.find(s => s.name === name);
+            if (!struct || !struct.structure) return;
+            
+            // This would require Molstar API to show/hide structures
+            // For now, we'll reload the visible structures
+            if (visible) {
+                // Structure should already be visible
+            } else {
+                // Hide structure - would need Molstar API
+                console.log('Hiding structure:', name);
+            }
+        }
+        
+        // Display sequence alignment
+        function displaySequenceAlignment() {
+            const alignmentView = document.getElementById('sequence-alignment-view');
+            const alignmentDisplay = document.getElementById('sequence-alignment-display');
+            alignmentView.style.display = 'block';
+            
+            let html = '';
+            
+            // Display reference sequence
+            html += `<div class="sequence-alignment-line" style="font-weight: bold;">Reference: ${alignmentData.reference.file.name}</div>`;
+            html += formatAlignedSequence(alignmentData.reference.seqString, alignmentData.aligned[0]?.sequenceAlignment.aligned1 || '', true);
+            
+            // Display aligned sequences
+            alignmentData.aligned.forEach((aligned, idx) => {
+                html += `<div class="sequence-alignment-line" style="font-weight: bold; margin-top: 10px;">${aligned.file.name}</div>`;
+                html += formatAlignedSequence(aligned.seqString, aligned.sequenceAlignment.aligned2, false, aligned.conservation);
+            });
+            
+            alignmentDisplay.innerHTML = html;
+            
+            // Add click handlers for interactive highlighting
+            alignmentDisplay.querySelectorAll('.sequence-alignment-line').forEach((line, idx) => {
+                if (idx > 0 && idx % 2 === 1) { // Skip header lines
+                    line.addEventListener('click', () => {
+                        // Highlight corresponding region in 3D view
+                        highlightRegionIn3D(idx);
+                    });
+                }
+            });
+        }
+        
+        // Format aligned sequence with conservation highlighting
+        function formatAlignedSequence(originalSeq, alignedSeq, isRef, conservation) {
+            let html = '<div class="sequence-alignment-line">';
+            for (let i = 0; i < alignedSeq.length; i++) {
+                const char = alignedSeq[i];
+                if (char === '-') {
+                    html += `<span class="gap-residue">-</span>`;
+                } else {
+                    const isConserved = conservation && conservation[i] && conservation[i].conserved;
+                    if (isConserved) {
+                        html += `<span class="conserved-residue">${char}</span>`;
+                    } else {
+                        html += `<span class="variable-residue">${char}</span>`;
+                    }
+                }
+            }
+            html += '</div>';
+            return html;
+        }
+        
+        // Highlight region in 3D view (placeholder)
+        function highlightRegionIn3D(position) {
+            console.log('Highlighting region at position:', position);
+            // This would require Molstar API to highlight specific residues
+        }
+        
+        // Export conservation analysis
+        function exportConservationAnalysis() {
+            if (!alignmentData) {
+                alert('No alignment data to export.');
+                return;
+            }
+            
+            let csv = 'Residue_Position,Reference_Residue,Aligned_File,Aligned_Residue,Conserved,RMSD\n';
+            
+            alignmentData.aligned.forEach(aligned => {
+                aligned.conservation.forEach((cons, idx) => {
+                    if (cons.refResidue !== '-' && cons.queryResidue !== '-') {
+                        csv += `${idx + 1},${cons.refResidue},${aligned.file.name},${cons.queryResidue},${cons.conserved ? 'Yes' : 'No'},${aligned.rmsd.toFixed(3)}\n`;
+                    }
+                });
+            });
+            
+            // Add sequence alignment
+            csv += '\n\nSequence Alignment:\n';
+            csv += `Reference: ${alignmentData.reference.file.name}\n`;
+            csv += alignmentData.aligned[0]?.sequenceAlignment.aligned1 || '' + '\n';
+            alignmentData.aligned.forEach(aligned => {
+                csv += `${aligned.file.name}:\n`;
+                csv += aligned.sequenceAlignment.aligned2 + '\n';
+            });
+            
+            // Create download
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'conservation_analysis.csv';
+            a.click();
+            URL.revokeObjectURL(url);
         }
         
         // Initialize single session mode (normal single viewer)

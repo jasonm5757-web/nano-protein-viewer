@@ -1441,6 +1441,7 @@
             padding: 2px 0;
             cursor: pointer;
             transition: background 0.2s ease;
+            color: hsl(220, 9%, 46%) !important;
         }
         
         .sequence-alignment-line:hover {
@@ -1453,20 +1454,21 @@
         
         .conserved-residue {
             background: #90EE90;
-            color: #000;
+            color: #000 !important;
             padding: 1px 2px;
             border-radius: 2px;
+            font-weight: 500;
         }
         
         .variable-residue {
             background: #FFB6C1;
-            color: #000;
+            color: #000 !important;
             padding: 1px 2px;
             border-radius: 2px;
         }
         
         .gap-residue {
-            color: #999;
+            color: #999 !important;
         }
     </style>
 </head>
@@ -1722,7 +1724,7 @@
                     <!-- Sequence Alignment View -->
                     <div id="sequence-alignment-view" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">
                         <h4 style="font-size: 13px; margin-bottom: 10px; color: hsl(220, 9%, 46%);">Sequence Alignment:</h4>
-                        <div id="sequence-alignment-display" style="font-family: 'Courier New', monospace; font-size: 11px; background: hsl(0, 0%, 100%); border: 1px solid #ddd; border-radius: 4px; padding: 10px; max-height: 300px; overflow-y: auto; line-height: 1.4;">
+                        <div id="sequence-alignment-display" style="font-family: 'Courier New', monospace; font-size: 11px; background: hsl(0, 0%, 100%); border: 1px solid #ddd; border-radius: 4px; padding: 10px; max-height: 300px; overflow-y: auto; line-height: 1.4; color: hsl(220, 9%, 46%);">
                             <!-- Sequence alignment will be displayed here -->
                         </div>
                     </div>
@@ -2534,13 +2536,24 @@
             const lines = pdbContent.split('\n');
             const residueMap = new Map(); // Map (chain, residueNumber) to residue name
             
+            // Standard amino acids only (exclude water, ions, ligands, etc.)
+            const standardAminoAcids = {
+                'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
+                'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
+                'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
+                'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V',
+                'ASX': 'B', 'GLX': 'Z', 'XAA': 'X', 'UNK': 'X'
+            };
+            
+            // Only process ATOM records (not HETATM) and only standard amino acids
             for (const line of lines) {
-                if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+                if (line.startsWith('ATOM')) { // Only ATOM, not HETATM
                     const residueName = line.substring(17, 20).trim();
                     const residueNumber = parseInt(line.substring(22, 26).trim());
                     const chainId = (line.substring(21, 22).trim() || 'A');
                     
-                    if (!isNaN(residueNumber) && residueName) {
+                    // Only include standard amino acids
+                    if (!isNaN(residueNumber) && residueName && standardAminoAcids.hasOwnProperty(residueName)) {
                         const key = `${chainId}_${residueNumber}`;
                         if (!residueMap.has(key)) {
                             residueMap.set(key, { name: residueName, number: residueNumber, chain: chainId });
@@ -2548,15 +2561,6 @@
                     }
                 }
             }
-            
-            // Convert residue names to single letter codes
-            const threeToOne = {
-                'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
-                'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
-                'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
-                'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V',
-                'ASX': 'B', 'GLX': 'Z', 'XAA': 'X', 'UNK': 'X'
-            };
             
             // Sort by chain, then by residue number (matching CA atom extraction order)
             const sortedResidues = Array.from(residueMap.values()).sort((a, b) => {
@@ -2568,7 +2572,7 @@
             
             const sequence = [];
             for (const data of sortedResidues) {
-                const oneLetter = threeToOne[data.name] || 'X';
+                const oneLetter = standardAminoAcids[data.name] || 'X';
                 sequence.push({ residue: oneLetter, number: data.number, chain: data.chain, name: data.name });
             }
             
@@ -2583,6 +2587,15 @@
             let columnIndices = {};
             let inAtomSite = false;
             let headerFound = false;
+            
+            // Standard amino acids only (exclude water, ions, ligands, etc.)
+            const standardAminoAcids = {
+                'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
+                'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
+                'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
+                'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V',
+                'ASX': 'B', 'GLX': 'Z', 'XAA': 'X', 'UNK': 'X'
+            };
             
             // First pass: find column indices
             for (let i = 0; i < lines.length; i++) {
@@ -2610,16 +2623,21 @@
                     if (inAtomSite && headerFound) {
                         const fields = line.split(/\s+/).filter(f => f.length > 0);
                         if (fields.length > 0) {
+                            const groupPdbIdx = columnIndices['group_PDB']; // 'ATOM' or 'HETATM'
                             const labelCompIdIdx = columnIndices['label_comp_id'];
                             const labelSeqIdIdx = columnIndices['label_seq_id'];
                             const labelAsymIdIdx = columnIndices['label_asym_id'];
                             
-                            if (labelCompIdIdx !== undefined && labelSeqIdIdx !== undefined) {
+                            // Only process ATOM records (not HETATM) and only standard amino acids
+                            const isAtom = groupPdbIdx !== undefined ? fields[groupPdbIdx] === 'ATOM' : true;
+                            
+                            if (isAtom && labelCompIdIdx !== undefined && labelSeqIdIdx !== undefined) {
                                 const residueName = fields[labelCompIdIdx];
                                 const residueNumber = parseInt(fields[labelSeqIdIdx]);
                                 const chainId = labelAsymIdIdx !== undefined ? fields[labelAsymIdIdx] : 'A';
                                 
-                                if (!isNaN(residueNumber) && residueName) {
+                                // Only include standard amino acids
+                                if (!isNaN(residueNumber) && residueName && standardAminoAcids.hasOwnProperty(residueName)) {
                                     const key = `${chainId}_${residueNumber}`;
                                     if (!residueMap.has(key)) {
                                         residueMap.set(key, { name: residueName, number: residueNumber, chain: chainId });
@@ -2631,21 +2649,13 @@
                 }
             }
             
-            const threeToOne = {
-                'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
-                'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
-                'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
-                'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V',
-                'ASX': 'B', 'GLX': 'Z', 'XAA': 'X', 'UNK': 'X'
-            };
-            
             const sortedResidues = Array.from(residueMap.values()).sort((a, b) => {
                 if (a.chain !== b.chain) return a.chain.localeCompare(b.chain);
                 return a.number - b.number;
             });
             
             for (const data of sortedResidues) {
-                const oneLetter = threeToOne[data.name] || 'X';
+                const oneLetter = standardAminoAcids[data.name] || 'X';
                 sequence.push({ residue: oneLetter, number: data.number, chain: data.chain, name: data.name });
             }
             
@@ -5975,10 +5985,80 @@
             return transformed.join('\n');
         }
         
-        // Create transformed CIF file (simplified - would need proper CIF parsing)
+        // Create transformed CIF file
         function createTransformedCIF(cifContent, transformation) {
-            // For now, return original - full CIF transformation would require more complex parsing
-            return cifContent;
+            const lines = cifContent.split('\n');
+            const transformed = [];
+            let columnIndices = {};
+            let inAtomSite = false;
+            let headerFound = false;
+            let cartnXIdx = -1, cartnYIdx = -1, cartnZIdx = -1;
+            
+            // First pass: find column indices and copy header
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const trimmedLine = line.trim();
+                
+                if (trimmedLine.startsWith('_atom_site.')) {
+                    inAtomSite = true;
+                    const fieldName = trimmedLine.split('.')[1].split(/\s+/)[0];
+                    const idx = Object.keys(columnIndices).length;
+                    columnIndices[fieldName] = idx;
+                    
+                    if (fieldName === 'Cartn_x') cartnXIdx = idx;
+                    else if (fieldName === 'Cartn_y') cartnYIdx = idx;
+                    else if (fieldName === 'Cartn_z') cartnZIdx = idx;
+                    
+                    transformed.push(line);
+                    continue;
+                }
+                
+                if (inAtomSite && trimmedLine && !trimmedLine.startsWith('#') && !headerFound) {
+                    headerFound = true;
+                    // Process this first data line and continue
+                }
+                
+                if (!inAtomSite || !headerFound) {
+                    transformed.push(line);
+                    continue;
+                }
+                
+                // Process data lines
+                if (trimmedLine && !trimmedLine.startsWith('#')) {
+                    const fields = trimmedLine.split(/\s+/).filter(f => f.length > 0);
+                    if (fields.length > 0 && cartnXIdx >= 0 && cartnYIdx >= 0 && cartnZIdx >= 0) {
+                        const x = parseFloat(fields[cartnXIdx]);
+                        const y = parseFloat(fields[cartnYIdx]);
+                        const z = parseFloat(fields[cartnZIdx]);
+                        
+                        if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+                            // Apply transformation
+                            const transformedCoords = applyTransformation(
+                                [{ x, y, z }], 
+                                transformation.rotation, 
+                                transformation.translation
+                            )[0];
+                            
+                            // Replace coordinates in the fields array
+                            fields[cartnXIdx] = transformedCoords.x.toFixed(3);
+                            fields[cartnYIdx] = transformedCoords.y.toFixed(3);
+                            fields[cartnZIdx] = transformedCoords.z.toFixed(3);
+                            
+                            // Reconstruct line (CIF uses space-separated fields, but we need to preserve formatting)
+                            // For simplicity, join with spaces (CIF format is flexible with whitespace)
+                            transformed.push(fields.join(' '));
+                        } else {
+                            transformed.push(line);
+                        }
+                    } else {
+                        transformed.push(line);
+                    }
+                } else {
+                    transformed.push(line);
+                }
+            }
+            
+            return transformed.join('\n');
         }
         
         // Display alignment results

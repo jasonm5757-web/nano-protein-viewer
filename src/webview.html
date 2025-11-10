@@ -2527,17 +2527,19 @@
         // Extract sequence from PDB file
         function extractSequenceFromPDB(pdbContent) {
             const lines = pdbContent.split('\n');
-            const sequence = [];
-            const residueMap = new Map(); // Map residue number to residue name
+            const residueMap = new Map(); // Map (chain, residueNumber) to residue name
             
             for (const line of lines) {
                 if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
                     const residueName = line.substring(17, 20).trim();
                     const residueNumber = parseInt(line.substring(22, 26).trim());
-                    const chainId = line.substring(21, 22).trim();
+                    const chainId = (line.substring(21, 22).trim() || 'A');
                     
-                    if (!residueMap.has(residueNumber)) {
-                        residueMap.set(residueNumber, { name: residueName, chain: chainId });
+                    if (!isNaN(residueNumber) && residueName) {
+                        const key = `${chainId}_${residueNumber}`;
+                        if (!residueMap.has(key)) {
+                            residueMap.set(key, { name: residueName, number: residueNumber, chain: chainId });
+                        }
                     }
                 }
             }
@@ -2551,10 +2553,18 @@
                 'ASX': 'B', 'GLX': 'Z', 'XAA': 'X', 'UNK': 'X'
             };
             
-            const sortedResidues = Array.from(residueMap.entries()).sort((a, b) => a[0] - b[0]);
-            for (const [num, data] of sortedResidues) {
+            // Sort by chain, then by residue number (matching CA atom extraction order)
+            const sortedResidues = Array.from(residueMap.values()).sort((a, b) => {
+                if (a.chain !== b.chain) {
+                    return (a.chain || 'A').localeCompare(b.chain || 'A');
+                }
+                return a.number - b.number;
+            });
+            
+            const sequence = [];
+            for (const data of sortedResidues) {
                 const oneLetter = threeToOne[data.name] || 'X';
-                sequence.push({ residue: oneLetter, number: num, chain: data.chain, name: data.name });
+                sequence.push({ residue: oneLetter, number: data.number, chain: data.chain, name: data.name });
             }
             
             return sequence;
@@ -2710,6 +2720,7 @@
         function extractCAAtoms(pdbContent) {
             const lines = pdbContent.split('\n');
             const atoms = [];
+            const atomMap = new Map(); // Use map to handle duplicate residue numbers
             
             for (const line of lines) {
                 if (line.startsWith('ATOM') && line.substring(12, 16).trim() === 'CA') {
@@ -2717,19 +2728,31 @@
                     const y = parseFloat(line.substring(38, 46));
                     const z = parseFloat(line.substring(46, 54));
                     const residueNumber = parseInt(line.substring(22, 26).trim());
-                    const chainId = line.substring(21, 22).trim();
+                    const chainId = line.substring(21, 22).trim() || 'A';
                     
-                    if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-                        atoms.push({
-                            x, y, z,
-                            residueNumber,
-                            chainId
-                        });
+                    if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !isNaN(residueNumber)) {
+                        const key = `${chainId}_${residueNumber}`;
+                        // Only add if we haven't seen this residue yet (handle duplicates)
+                        if (!atomMap.has(key)) {
+                            atomMap.set(key, {
+                                x, y, z,
+                                residueNumber,
+                                chainId
+                            });
+                        }
                     }
                 }
             }
             
-            return atoms;
+            // Sort by chain, then by residue number (matching sequence extraction order)
+            const sortedAtoms = Array.from(atomMap.values()).sort((a, b) => {
+                if (a.chainId !== b.chainId) {
+                    return (a.chainId || 'A').localeCompare(b.chainId || 'A');
+                }
+                return a.residueNumber - b.residueNumber;
+            });
+            
+            return sortedAtoms;
         }
         
         // Extract CA atoms from mmCIF
@@ -5734,15 +5757,17 @@
         }
         
         // Map aligned sequences to CA atoms
+        // This function maps sequence positions (not residue numbers) to CA atoms
+        // Key insight: sequences are aligned by homology, not by residue number
         function mapAlignedSequencesToAtoms(refCA, queryCA, alignedRef, alignedQuery, refSeq, querySeq) {
             const refAligned = [];
             const queryAligned = [];
-            let refSeqIdx = 0;
-            let querySeqIdx = 0;
+            let refSeqIdx = 0;  // Index in original refSeq array
+            let querySeqIdx = 0; // Index in original querySeq array
             
-            // Create maps from residue number to CA atom for faster lookup
+            // Create maps from (chain, residueNumber) to CA atom for faster lookup
             const refAtomMap = new Map();
-            refCA.forEach((atom, idx) => {
+            refCA.forEach((atom) => {
                 const key = `${atom.chainId || 'A'}_${atom.residueNumber}`;
                 if (!refAtomMap.has(key)) {
                     refAtomMap.set(key, atom);
@@ -5750,52 +5775,83 @@
             });
             
             const queryAtomMap = new Map();
-            queryCA.forEach((atom, idx) => {
+            queryCA.forEach((atom) => {
                 const key = `${atom.chainId || 'A'}_${atom.residueNumber}`;
                 if (!queryAtomMap.has(key)) {
                     queryAtomMap.set(key, atom);
                 }
             });
             
-            // Map aligned sequences to atoms using residue numbers
+            // Map aligned sequences to atoms
+            // The aligned sequences have gaps ('-'), but we track position in original sequences
             for (let i = 0; i < alignedRef.length; i++) {
                 let refAtom = null;
                 let queryAtom = null;
                 
+                // Process reference sequence position
                 if (alignedRef[i] !== '-') {
+                    // This position corresponds to refSeq[refSeqIdx]
                     if (refSeqIdx < refSeq.length) {
                         const refResidue = refSeq[refSeqIdx];
+                        // Look up CA atom using chain and residue number from sequence
                         const refKey = `${refResidue.chain || 'A'}_${refResidue.number}`;
                         refAtom = refAtomMap.get(refKey);
-                        refSeqIdx++;
+                        
+                        if (!refAtom) {
+                            console.warn(`No CA atom found for ref residue ${refResidue.number} chain ${refResidue.chain} at sequence position ${refSeqIdx}`);
+                        }
+                        
+                        refSeqIdx++; // Advance to next position in original sequence
                     }
                 }
                 
+                // Process query sequence position
                 if (alignedQuery[i] !== '-') {
+                    // This position corresponds to querySeq[querySeqIdx]
                     if (querySeqIdx < querySeq.length) {
                         const queryResidue = querySeq[querySeqIdx];
+                        // Look up CA atom using chain and residue number from sequence
                         const queryKey = `${queryResidue.chain || 'A'}_${queryResidue.number}`;
                         queryAtom = queryAtomMap.get(queryKey);
-                        querySeqIdx++;
+                        
+                        if (!queryAtom) {
+                            console.warn(`No CA atom found for query residue ${queryResidue.number} chain ${queryResidue.chain} at sequence position ${querySeqIdx}`);
+                        }
+                        
+                        querySeqIdx++; // Advance to next position in original sequence
                     }
                 }
                 
-                // Only include positions where both have atoms (no gaps)
-                if (refAtom !== null && refAtom !== undefined && queryAtom !== null && queryAtom !== undefined) {
+                // Only include positions where both have atoms (no gaps in either sequence)
+                if (refAtom && queryAtom) {
                     refAligned.push(refAtom);
                     queryAligned.push(queryAtom);
                 }
             }
             
             if (refAligned.length === 0) {
-                console.warn('No matching atoms found for alignment. Using first N atoms where N = min(refCA.length, queryCA.length)');
-                const minLen = Math.min(refCA.length, queryCA.length);
-                return {
-                    ref: refCA.slice(0, minLen),
-                    query: queryCA.slice(0, minLen)
-                };
+                console.warn('No matching atoms found for alignment. Attempting fallback...');
+                // Fallback: try to match by sequence index if residue numbers don't match
+                const minLen = Math.min(refSeq.length, querySeq.length, refCA.length, queryCA.length);
+                const fallbackRef = [];
+                const fallbackQuery = [];
+                
+                for (let i = 0; i < minLen; i++) {
+                    if (i < refCA.length && i < queryCA.length) {
+                        fallbackRef.push(refCA[i]);
+                        fallbackQuery.push(queryCA[i]);
+                    }
+                }
+                
+                if (fallbackRef.length > 0) {
+                    console.warn(`Using fallback alignment with ${fallbackRef.length} atoms`);
+                    return { ref: fallbackRef, query: fallbackQuery };
+                }
+                
+                throw new Error('Could not map sequences to atoms. Please check that structures contain valid CA atoms.');
             }
             
+            console.log(`Successfully mapped ${refAligned.length} atom pairs from ${alignedRef.length} aligned positions`);
             return { ref: refAligned, query: queryAligned };
         }
         

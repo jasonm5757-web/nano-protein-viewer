@@ -1391,8 +1391,21 @@
             margin-bottom: 10px;
         }
         
+        .alignment-stats {
+            color: hsl(220, 9%, 46%) !important;
+        }
+        
         .alignment-stats div {
             margin-bottom: 5px;
+            color: hsl(220, 9%, 46%) !important;
+        }
+        
+        .alignment-stats strong {
+            color: hsl(220, 9%, 46%) !important;
+        }
+        
+        .alignment-stats span {
+            color: hsl(220, 9%, 46%) !important;
         }
         
         .structure-toggle-item {
@@ -2552,23 +2565,52 @@
             const lines = cifContent.split('\n');
             const sequence = [];
             const residueMap = new Map();
+            let columnIndices = {};
             let inAtomSite = false;
+            let headerFound = false;
             
+            // First pass: find column indices
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (line.startsWith('_atom_site.')) {
                     inAtomSite = true;
+                    const fieldName = line.split('.')[1].split(/\s+/)[0];
+                    columnIndices[fieldName] = Object.keys(columnIndices).length;
                     continue;
                 }
-                if (inAtomSite && line && !line.startsWith('#')) {
-                    const fields = line.split(/\s+/);
-                    if (fields.length >= 4) {
-                        const residueName = fields[3];
-                        const residueNumber = parseInt(fields[4]);
-                        const chainId = fields[5] || 'A';
-                        
-                        if (!isNaN(residueNumber) && !residueMap.has(residueNumber)) {
-                            residueMap.set(residueNumber, { name: residueName, chain: chainId });
+                if (inAtomSite && line && !line.startsWith('#') && !headerFound) {
+                    // First data line - we now know the column order
+                    headerFound = true;
+                    break;
+                }
+            }
+            
+            // Second pass: extract data
+            if (headerFound && inAtomSite) {
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line.startsWith('_atom_site.') || line.startsWith('#') || !line) continue;
+                    
+                    // Check if we're past the header
+                    if (inAtomSite && headerFound) {
+                        const fields = line.split(/\s+/).filter(f => f.length > 0);
+                        if (fields.length > 0) {
+                            const labelCompIdIdx = columnIndices['label_comp_id'];
+                            const labelSeqIdIdx = columnIndices['label_seq_id'];
+                            const labelAsymIdIdx = columnIndices['label_asym_id'];
+                            
+                            if (labelCompIdIdx !== undefined && labelSeqIdIdx !== undefined) {
+                                const residueName = fields[labelCompIdIdx];
+                                const residueNumber = parseInt(fields[labelSeqIdIdx]);
+                                const chainId = labelAsymIdIdx !== undefined ? fields[labelAsymIdIdx] : 'A';
+                                
+                                if (!isNaN(residueNumber) && residueName) {
+                                    const key = `${chainId}_${residueNumber}`;
+                                    if (!residueMap.has(key)) {
+                                        residueMap.set(key, { name: residueName, number: residueNumber, chain: chainId });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -2582,10 +2624,14 @@
                 'ASX': 'B', 'GLX': 'Z', 'XAA': 'X', 'UNK': 'X'
             };
             
-            const sortedResidues = Array.from(residueMap.entries()).sort((a, b) => a[0] - b[0]);
-            for (const [num, data] of sortedResidues) {
+            const sortedResidues = Array.from(residueMap.values()).sort((a, b) => {
+                if (a.chain !== b.chain) return a.chain.localeCompare(b.chain);
+                return a.number - b.number;
+            });
+            
+            for (const data of sortedResidues) {
                 const oneLetter = threeToOne[data.name] || 'X';
-                sequence.push({ residue: oneLetter, number: num, chain: data.chain, name: data.name });
+                sequence.push({ residue: oneLetter, number: data.number, chain: data.chain, name: data.name });
             }
             
             return sequence;
@@ -2690,40 +2736,65 @@
         function extractCAAtomsFromCIF(cifContent) {
             const lines = cifContent.split('\n');
             const atoms = [];
+            let columnIndices = {};
             let inAtomSite = false;
-            let labelAtomIdIdx = -1, labelCompIdIdx = -1, labelAsymIdIdx = -1, labelSeqIdIdx = -1;
-            let CartnXIdx = -1, CartnYIdx = -1, CartnZIdx = -1;
+            let headerFound = false;
             
+            // First pass: find column indices
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (line.startsWith('_atom_site.')) {
                     inAtomSite = true;
-                    const field = line.split('.')[1].split(/\s+/)[0];
-                    if (field === 'label_atom_id') labelAtomIdIdx = i;
-                    else if (field === 'label_comp_id') labelCompIdIdx = i;
-                    else if (field === 'label_asym_id') labelAsymIdIdx = i;
-                    else if (field === 'label_seq_id') labelSeqIdIdx = i;
-                    else if (field === 'Cartn_x') CartnXIdx = i;
-                    else if (field === 'Cartn_y') CartnYIdx = i;
-                    else if (field === 'Cartn_z') CartnZIdx = i;
+                    const fieldName = line.split('.')[1].split(/\s+/)[0];
+                    columnIndices[fieldName] = Object.keys(columnIndices).length;
                     continue;
                 }
-                if (inAtomSite && line && !line.startsWith('#') && labelAtomIdIdx >= 0) {
-                    const fields = line.split(/\s+/);
-                    const atomId = fields[labelAtomIdIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)];
-                    if (atomId === 'CA') {
-                        const x = parseFloat(fields[CartnXIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)]);
-                        const y = parseFloat(fields[CartnYIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)]);
-                        const z = parseFloat(fields[CartnZIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)]);
-                        const residueNumber = parseInt(fields[labelSeqIdIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)]);
-                        const chainId = fields[labelAsymIdIdx - (lines.findIndex((l, idx) => idx < i && l.trim().startsWith('_atom_site.')) + 1)] || 'A';
-                        
-                        if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !isNaN(residueNumber)) {
-                            atoms.push({ x, y, z, residueNumber, chainId });
+                if (inAtomSite && line && !line.startsWith('#') && !headerFound) {
+                    headerFound = true;
+                    break;
+                }
+            }
+            
+            // Second pass: extract CA atoms
+            if (headerFound && inAtomSite) {
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line.startsWith('_atom_site.') || line.startsWith('#') || !line) continue;
+                    
+                    if (inAtomSite && headerFound) {
+                        const fields = line.split(/\s+/).filter(f => f.length > 0);
+                        if (fields.length > 0) {
+                            const labelAtomIdIdx = columnIndices['label_atom_id'];
+                            const labelSeqIdIdx = columnIndices['label_seq_id'];
+                            const labelAsymIdIdx = columnIndices['label_asym_id'];
+                            const CartnXIdx = columnIndices['Cartn_x'];
+                            const CartnYIdx = columnIndices['Cartn_y'];
+                            const CartnZIdx = columnIndices['Cartn_z'];
+                            
+                            if (labelAtomIdIdx !== undefined && fields[labelAtomIdIdx] === 'CA') {
+                                if (CartnXIdx !== undefined && CartnYIdx !== undefined && CartnZIdx !== undefined && 
+                                    labelSeqIdIdx !== undefined) {
+                                    const x = parseFloat(fields[CartnXIdx]);
+                                    const y = parseFloat(fields[CartnYIdx]);
+                                    const z = parseFloat(fields[CartnZIdx]);
+                                    const residueNumber = parseInt(fields[labelSeqIdIdx]);
+                                    const chainId = labelAsymIdIdx !== undefined ? fields[labelAsymIdIdx] : 'A';
+                                    
+                                    if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !isNaN(residueNumber)) {
+                                        atoms.push({ x, y, z, residueNumber, chainId });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
+            
+            // Sort by chain and residue number
+            atoms.sort((a, b) => {
+                if (a.chainId !== b.chainId) return a.chainId.localeCompare(b.chainId);
+                return a.residueNumber - b.residueNumber;
+            });
             
             return atoms;
         }
@@ -5553,7 +5624,12 @@
                     refCAAtoms = extractCAAtoms(referenceFile.data);
                 }
                 
+                if (refSequence.length === 0 || refCAAtoms.length === 0) {
+                    throw new Error(`Failed to extract sequence or CA atoms from reference file: ${referenceFile.name}`);
+                }
+                
                 const refSeqString = refSequence.map(s => s.residue).join('');
+                console.log(`Reference: ${refSequence.length} residues, ${refCAAtoms.length} CA atoms`);
                 
                 // Store alignment results
                 alignmentData = {
@@ -5578,10 +5654,17 @@
                         caAtoms = extractCAAtoms(file.data);
                     }
                     
+                    if (seq.length === 0 || caAtoms.length === 0) {
+                        console.warn(`Failed to extract sequence or CA atoms from: ${file.name}, skipping...`);
+                        continue;
+                    }
+                    
                     const seqString = seq.map(s => s.residue).join('');
+                    console.log(`Aligning ${file.name}: ${seq.length} residues, ${caAtoms.length} CA atoms`);
                     
                     // Perform sequence alignment
                     const seqAlignment = needlemanWunsch(refSeqString, seqString);
+                    console.log(`Sequence alignment score: ${seqAlignment.score}, aligned length: ${seqAlignment.aligned1.length}`);
                     
                     // Map aligned sequences to CA atoms
                     const alignedCA = mapAlignedSequencesToAtoms(
@@ -5590,12 +5673,22 @@
                         refSequence, seq
                     );
                     
+                    if (alignedCA.ref.length === 0 || alignedCA.query.length === 0) {
+                        console.warn(`No matching atoms found for ${file.name}, skipping alignment...`);
+                        continue;
+                    }
+                    
+                    console.log(`Mapped ${alignedCA.ref.length} atom pairs for alignment`);
+                    
                     // Perform structural alignment using Kabsch
                     const transformation = kabschAlgorithm(alignedCA.ref, alignedCA.query);
+                    
+                    // Apply transformation to ALL atoms (not just CA)
                     const transformedAtoms = applyTransformation(caAtoms, transformation.rotation, transformation.translation);
                     
                     // Calculate RMSD on aligned residues
                     const rmsd = calculateRMSD(alignedCA.ref, alignedCA.query);
+                    console.log(`RMSD for ${file.name}: ${rmsd.toFixed(2)} Å`);
                     
                     // Identify conserved regions (100% sequence identity)
                     const conservation = identifyConservedRegions(
@@ -5615,6 +5708,10 @@
                         conservation: conservation,
                         alignedCA: alignedCA
                     });
+                }
+                
+                if (alignmentData.aligned.length === 0) {
+                    throw new Error('No structures could be aligned. Please check that files contain valid protein structures.');
                 }
                 
                 // Visualize aligned structures
@@ -5640,40 +5737,66 @@
         function mapAlignedSequencesToAtoms(refCA, queryCA, alignedRef, alignedQuery, refSeq, querySeq) {
             const refAligned = [];
             const queryAligned = [];
-            let refIdx = 0;
-            let queryIdx = 0;
+            let refSeqIdx = 0;
+            let querySeqIdx = 0;
             
+            // Create maps from residue number to CA atom for faster lookup
+            const refAtomMap = new Map();
+            refCA.forEach((atom, idx) => {
+                const key = `${atom.chainId || 'A'}_${atom.residueNumber}`;
+                if (!refAtomMap.has(key)) {
+                    refAtomMap.set(key, atom);
+                }
+            });
+            
+            const queryAtomMap = new Map();
+            queryCA.forEach((atom, idx) => {
+                const key = `${atom.chainId || 'A'}_${atom.residueNumber}`;
+                if (!queryAtomMap.has(key)) {
+                    queryAtomMap.set(key, atom);
+                }
+            });
+            
+            // Map aligned sequences to atoms using residue numbers
             for (let i = 0; i < alignedRef.length; i++) {
+                let refAtom = null;
+                let queryAtom = null;
+                
                 if (alignedRef[i] !== '-') {
-                    if (refIdx < refCA.length) {
-                        refAligned.push(refCA[refIdx]);
+                    if (refSeqIdx < refSeq.length) {
+                        const refResidue = refSeq[refSeqIdx];
+                        const refKey = `${refResidue.chain || 'A'}_${refResidue.number}`;
+                        refAtom = refAtomMap.get(refKey);
+                        refSeqIdx++;
                     }
-                    refIdx++;
-                } else {
-                    refAligned.push(null); // Gap in reference
                 }
                 
                 if (alignedQuery[i] !== '-') {
-                    if (queryIdx < queryCA.length) {
-                        queryAligned.push(queryCA[queryIdx]);
+                    if (querySeqIdx < querySeq.length) {
+                        const queryResidue = querySeq[querySeqIdx];
+                        const queryKey = `${queryResidue.chain || 'A'}_${queryResidue.number}`;
+                        queryAtom = queryAtomMap.get(queryKey);
+                        querySeqIdx++;
                     }
-                    queryIdx++;
-                } else {
-                    queryAligned.push(null); // Gap in query
+                }
+                
+                // Only include positions where both have atoms (no gaps)
+                if (refAtom !== null && refAtom !== undefined && queryAtom !== null && queryAtom !== undefined) {
+                    refAligned.push(refAtom);
+                    queryAligned.push(queryAtom);
                 }
             }
             
-            // Filter out gaps
-            const refFiltered = [];
-            const queryFiltered = [];
-            for (let i = 0; i < refAligned.length; i++) {
-                if (refAligned[i] !== null && queryAligned[i] !== null) {
-                    refFiltered.push(refAligned[i]);
-                    queryFiltered.push(queryAligned[i]);
-                }
+            if (refAligned.length === 0) {
+                console.warn('No matching atoms found for alignment. Using first N atoms where N = min(refCA.length, queryCA.length)');
+                const minLen = Math.min(refCA.length, queryCA.length);
+                return {
+                    ref: refCA.slice(0, minLen),
+                    query: queryCA.slice(0, minLen)
+                };
             }
             
-            return { ref: refFiltered, query: queryFiltered };
+            return { ref: refAligned, query: queryAligned };
         }
         
         // Identify conserved regions (100% sequence identity)
@@ -5719,24 +5842,28 @@
             
             // Load and transform aligned structures
             for (const aligned of alignmentData.aligned) {
-                // Create transformed PDB content
-                const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
-                
-                const blob = new Blob([transformedPDB], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                const data = await plugin.builders.data.download({ url: url, isBinary: false });
-                const trajectory = await plugin.builders.structure.parseTrajectory(data, aligned.file.format);
-                const structure = await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
-                URL.revokeObjectURL(url);
-                
-                alignedStructures.push({
-                    name: aligned.file.name,
-                    structure: structure,
-                    isReference: false,
-                    visible: true,
-                    conservation: aligned.conservation
-                });
-                structureVisibility.set(aligned.file.name, true);
+                try {
+                    // Create transformed PDB content
+                    const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
+                    
+                    const blob = new Blob([transformedPDB], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const data = await plugin.builders.data.download({ url: url, isBinary: false });
+                    const trajectory = await plugin.builders.structure.parseTrajectory(data, aligned.file.format);
+                    const structure = await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
+                    URL.revokeObjectURL(url);
+                    
+                    alignedStructures.push({
+                        name: aligned.file.name,
+                        structure: structure,
+                        isReference: false,
+                        visible: true,
+                        conservation: aligned.conservation
+                    });
+                    structureVisibility.set(aligned.file.name, true);
+                } catch (error) {
+                    console.error(`Error loading aligned structure ${aligned.file.name}:`, error);
+                }
             }
             
             // Update structure toggle controls

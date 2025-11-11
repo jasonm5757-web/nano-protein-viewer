@@ -1702,9 +1702,20 @@
                     <!-- Alignment Results Section -->
                     <div id="alignment-results-section" style="display: none;">
                         <div class="alignment-stats" style="margin-bottom: 10px; padding: 8px; background: hsl(210, 40%, 98%); border-radius: 4px; font-size: 12px;">
-                            <div><strong>RMSD:</strong> <span id="alignment-rmsd">-</span> Å</div>
-                            <div><strong>Conserved Residues:</strong> <span id="conserved-count">-</span></div>
-                            <div><strong>Variable Residues:</strong> <span id="variable-count">-</span></div>
+                            <div style="margin-bottom: 8px;"><strong>Structural Alignment:</strong></div>
+                            <div style="margin-left: 10px; margin-bottom: 4px;"><strong>RMSD:</strong> <span id="alignment-rmsd">-</span> Å</div>
+                            <div style="margin-left: 10px; margin-bottom: 4px;"><strong>Aligned Residues:</strong> <span id="aligned-residues-count">-</span></div>
+                            <div style="margin-left: 10px; margin-bottom: 8px;"><strong>Coverage:</strong> <span id="alignment-coverage">-</span>%</div>
+                            
+                            <div style="margin-bottom: 8px; margin-top: 8px; border-top: 1px solid #ddd; padding-top: 8px;"><strong>Sequence Alignment:</strong></div>
+                            <div style="margin-left: 10px; margin-bottom: 4px;"><strong>Sequence Identity:</strong> <span id="sequence-identity">-</span>%</div>
+                            <div style="margin-left: 10px; margin-bottom: 4px;"><strong>Conserved Residues:</strong> <span id="conserved-count">-</span></div>
+                            <div style="margin-left: 10px; margin-bottom: 4px;"><strong>Variable Residues:</strong> <span id="variable-count">-</span></div>
+                        </div>
+                        
+                        <!-- Detailed Alignment Stats (per structure) -->
+                        <div id="detailed-alignment-stats" style="margin-bottom: 10px; font-size: 11px;">
+                            <!-- Detailed stats will be populated here -->
                         </div>
                         
                         <!-- Structure Toggle Controls -->
@@ -5765,11 +5776,13 @@
                     const seqAlignment = needlemanWunsch(refSeqString, seqString);
                     console.log(`Sequence alignment score: ${seqAlignment.score}, aligned length: ${seqAlignment.aligned1.length}`);
                     
-                    // Map aligned sequences to CA atoms
+                    // Map aligned sequences to CA atoms (using only gap-free positions)
+                    // identityThreshold = 0 means no filtering by sequence identity
                     const alignedCA = mapAlignedSequencesToAtoms(
                         refCAAtoms, caAtoms, 
                         seqAlignment.aligned1, seqAlignment.aligned2,
-                        refSequence, seq
+                        refSequence, seq,
+                        0  // No identity filtering - use all gap-free positions
                     );
                     
                     if (alignedCA.ref.length === 0 || alignedCA.query.length === 0) {
@@ -5777,76 +5790,46 @@
                         continue;
                     }
                     
-                    console.log(`Mapped ${alignedCA.ref.length} atom pairs for alignment`);
+                    // Validation checks
+                    const MIN_ALIGNED_RESIDUES = 50;  // Minimum number of aligned residues
+                    const MIN_COVERAGE = 70.0;        // Minimum coverage percentage of shorter sequence
+                    const stats = alignedCA.stats;
                     
-                    // Perform structural alignment using Kabsch with iterative refinement
-                    let transformation = kabschAlgorithm(alignedCA.ref, alignedCA.query);
+                    console.log(`\n=== Alignment Statistics for ${file.name} ===`);
+                    console.log(`  Matched atom pairs: ${alignedCA.ref.length}`);
+                    console.log(`  Total aligned positions: ${stats.totalAligned}`);
+                    console.log(`  Matched positions (no gaps): ${stats.matchedPositions}`);
+                    console.log(`  Identical residues: ${stats.identicalPositions} (${stats.sequenceIdentity.toFixed(1)}% identity)`);
+                    console.log(`  Reference gaps: ${stats.refGaps}`);
+                    console.log(`  Query gaps: ${stats.queryGaps}`);
+                    console.log(`  Coverage: ${stats.coverage.toFixed(1)}% of shorter sequence (${stats.shorterSeqLength} residues)`);
                     
-                    // Apply initial transformation
-                    let transformedQuery = applyTransformation(alignedCA.query, transformation.rotation, transformation.translation);
-                    let bestRMSD = calculateRMSD(alignedCA.ref, transformedQuery);
-                    let bestTransformation = transformation;
-                    const maxIterations = 10;
-                    let previousRMSD = bestRMSD;
-                    
-                    console.log(`Initial RMSD: ${bestRMSD.toFixed(2)} Å`);
-                    
-                    // Iterative refinement for better alignment
-                    for (let iter = 0; iter < maxIterations; iter++) {
-                        // Recalculate transformation on current transformed coordinates
-                        const newTransformation = kabschAlgorithm(alignedCA.ref, transformedQuery);
-                        
-                        // Compose transformations (apply new transformation to already-transformed coordinates)
-                        const composedRotation = multiplyMatrices(newTransformation.rotation, transformation.rotation);
-                        const composedTranslation = {
-                            x: newTransformation.translation.x + 
-                               (newTransformation.rotation[0][0] * transformation.translation.x + 
-                                newTransformation.rotation[0][1] * transformation.translation.y + 
-                                newTransformation.rotation[0][2] * transformation.translation.z),
-                            y: newTransformation.translation.y + 
-                               (newTransformation.rotation[1][0] * transformation.translation.x + 
-                                newTransformation.rotation[1][1] * transformation.translation.y + 
-                                newTransformation.rotation[1][2] * transformation.translation.z),
-                            z: newTransformation.translation.z + 
-                               (newTransformation.rotation[2][0] * transformation.translation.x + 
-                                newTransformation.rotation[2][1] * transformation.translation.y + 
-                                newTransformation.rotation[2][2] * transformation.translation.z)
-                        };
-                        
-                        transformation = {
-                            rotation: composedRotation,
-                            translation: composedTranslation
-                        };
-                        
-                        // Apply composed transformation to original query coordinates
-                        transformedQuery = applyTransformation(alignedCA.query, transformation.rotation, transformation.translation);
-                        const currentRMSD = calculateRMSD(alignedCA.ref, transformedQuery);
-                        
-                        if (currentRMSD < bestRMSD) {
-                            bestRMSD = currentRMSD;
-                            bestTransformation = transformation;
-                        }
-                        
-                        console.log(`Iteration ${iter + 1}: RMSD = ${currentRMSD.toFixed(2)} Å`);
-                        
-                        // If RMSD is already very low, stop
-                        if (currentRMSD < 0.01) break;
-                        
-                        // If not improving significantly, stop
-                        if (Math.abs(previousRMSD - currentRMSD) < 0.01) break;
-                        
-                        previousRMSD = currentRMSD;
+                    // Validate alignment quality
+                    if (alignedCA.ref.length < MIN_ALIGNED_RESIDUES) {
+                        console.warn(`WARNING: Only ${alignedCA.ref.length} aligned residues found (minimum: ${MIN_ALIGNED_RESIDUES}).`);
+                        console.warn(`  This alignment may be unreliable. Consider checking sequence homology.`);
+                        // Continue anyway, but log the warning
                     }
                     
-                    transformation = bestTransformation;
+                    if (stats.coverage < MIN_COVERAGE) {
+                        console.warn(`WARNING: Coverage is ${stats.coverage.toFixed(1)}% (minimum: ${MIN_COVERAGE}%).`);
+                        console.warn(`  Large portions of the sequences are not aligned.`);
+                        // Continue anyway, but log the warning
+                    }
+                    
+                    // Perform structural alignment using Kabsch algorithm (single pass - optimal solution)
+                    console.log(`\nPerforming structural alignment with ${alignedCA.ref.length} atom pairs...`);
+                    const transformation = kabschAlgorithm(alignedCA.ref, alignedCA.query);
+                    
+                    // Apply transformation to aligned CA atoms and calculate RMSD
+                    const transformedQuery = applyTransformation(alignedCA.query, transformation.rotation, transformation.translation);
+                    const rmsd = calculateRMSD(alignedCA.ref, transformedQuery);
+                    
+                    console.log(`  RMSD: ${rmsd.toFixed(2)} Å`);
+                    console.log(`=== End Alignment Statistics ===\n`);
                     
                     // Apply transformation to ALL atoms (not just CA)
                     const transformedAtoms = applyTransformation(caAtoms, transformation.rotation, transformation.translation);
-                    
-                    // Calculate final RMSD on aligned residues
-                    const finalTransformedQuery = applyTransformation(alignedCA.query, transformation.rotation, transformation.translation);
-                    const rmsd = calculateRMSD(alignedCA.ref, finalTransformedQuery);
-                    console.log(`RMSD for ${file.name}: ${rmsd.toFixed(2)} Å (after ${maxIterations} refinement iterations)`);
                     
                     // Identify conserved regions (100% sequence identity)
                     const conservation = identifyConservedRegions(
@@ -5864,7 +5847,8 @@
                         sequenceAlignment: seqAlignment,
                         rmsd: rmsd,
                         conservation: conservation,
-                        alignedCA: alignedCA
+                        alignedCA: alignedCA,
+                        alignmentStats: stats  // Include statistics for display
                     });
                 }
                 
@@ -5891,10 +5875,50 @@
             }
         }
         
+        // Calculate alignment statistics
+        function calculateAlignmentStats(alignedRef, alignedQuery, refSeq, querySeq) {
+            const totalAligned = alignedRef.length;
+            let matchedPositions = 0;  // Positions where both sequences have residues (no gaps)
+            let identicalPositions = 0; // Positions where residues are identical
+            let refGaps = 0;
+            let queryGaps = 0;
+            
+            for (let i = 0; i < totalAligned; i++) {
+                const refChar = alignedRef[i];
+                const queryChar = alignedQuery[i];
+                
+                if (refChar === '-') refGaps++;
+                if (queryChar === '-') queryGaps++;
+                
+                if (refChar !== '-' && queryChar !== '-') {
+                    matchedPositions++;
+                    if (refChar === queryChar) {
+                        identicalPositions++;
+                    }
+                }
+            }
+            
+            const shorterSeqLength = Math.min(refSeq.length, querySeq.length);
+            const coverage = shorterSeqLength > 0 ? (matchedPositions / shorterSeqLength) * 100 : 0;
+            const sequenceIdentity = matchedPositions > 0 ? (identicalPositions / matchedPositions) * 100 : 0;
+            
+            return {
+                totalAligned: totalAligned,
+                matchedPositions: matchedPositions,
+                identicalPositions: identicalPositions,
+                refGaps: refGaps,
+                queryGaps: queryGaps,
+                coverage: coverage,
+                sequenceIdentity: sequenceIdentity,
+                shorterSeqLength: shorterSeqLength
+            };
+        }
+        
         // Map aligned sequences to CA atoms
         // This function maps sequence positions (not residue numbers) to CA atoms
         // Key insight: sequences are aligned by homology, not by residue number
-        function mapAlignedSequencesToAtoms(refCA, queryCA, alignedRef, alignedQuery, refSeq, querySeq) {
+        // Optionally filters by sequence identity threshold (0-100, where 0 = no filtering)
+        function mapAlignedSequencesToAtoms(refCA, queryCA, alignedRef, alignedQuery, refSeq, querySeq, identityThreshold = 0) {
             const refAligned = [];
             const queryAligned = [];
             let refSeqIdx = 0;  // Index in original refSeq array
@@ -5920,11 +5944,16 @@
             // Map aligned sequences to atoms
             // The aligned sequences have gaps ('-'), but we track position in original sequences
             for (let i = 0; i < alignedRef.length; i++) {
+                // Check if residues are identical (for identity filtering) - check directly from aligned sequences
+                const refChar = alignedRef[i];
+                const queryChar = alignedQuery[i];
+                const isIdentical = (refChar !== '-' && queryChar !== '-' && refChar === queryChar);
+                
                 let refAtom = null;
                 let queryAtom = null;
                 
                 // Process reference sequence position
-                if (alignedRef[i] !== '-') {
+                if (refChar !== '-') {
                     // This position corresponds to refSeq[refSeqIdx]
                     if (refSeqIdx < refSeq.length) {
                         const refResidue = refSeq[refSeqIdx];
@@ -5941,7 +5970,7 @@
                 }
                 
                 // Process query sequence position
-                if (alignedQuery[i] !== '-') {
+                if (queryChar !== '-') {
                     // This position corresponds to querySeq[querySeqIdx]
                     if (querySeqIdx < querySeq.length) {
                         const queryResidue = querySeq[querySeqIdx];
@@ -5958,9 +5987,19 @@
                 }
                 
                 // Only include positions where both have atoms (no gaps in either sequence)
+                // Optionally filter by sequence identity if threshold is set
                 if (refAtom && queryAtom) {
-                    refAligned.push(refAtom);
-                    queryAligned.push(queryAtom);
+                    if (identityThreshold > 0) {
+                        // Filter: only include if residues are identical
+                        if (isIdentical) {
+                            refAligned.push(refAtom);
+                            queryAligned.push(queryAtom);
+                        }
+                    } else {
+                        // No filtering: include all matched positions
+                        refAligned.push(refAtom);
+                        queryAligned.push(queryAtom);
+                    }
                 }
             }
             
@@ -5980,14 +6019,39 @@
                 
                 if (fallbackRef.length > 0) {
                     console.warn(`Using fallback alignment with ${fallbackRef.length} atoms`);
-                    return { ref: fallbackRef, query: fallbackQuery };
+                    return { 
+                        ref: fallbackRef, 
+                        query: fallbackQuery,
+                        stats: {
+                            totalAligned: fallbackRef.length,
+                            matchedPositions: fallbackRef.length,
+                            identicalPositions: 0,
+                            refGaps: 0,
+                            queryGaps: 0,
+                            coverage: (fallbackRef.length / minLen) * 100,
+                            sequenceIdentity: 0,
+                            shorterSeqLength: minLen
+                        }
+                    };
                 }
                 
                 throw new Error('Could not map sequences to atoms. Please check that structures contain valid CA atoms.');
             }
             
+            // Calculate statistics for the mapped atoms
+            const stats = calculateAlignmentStats(alignedRef, alignedQuery, refSeq, querySeq);
+            stats.matchedAtoms = refAligned.length;
+            
             console.log(`Successfully mapped ${refAligned.length} atom pairs from ${alignedRef.length} aligned positions`);
-            return { ref: refAligned, query: queryAligned };
+            if (identityThreshold > 0) {
+                console.log(`  (Filtered to ${refAligned.length} identical residue pairs with identity threshold ${identityThreshold}%)`);
+            }
+            
+            return { 
+                ref: refAligned, 
+                query: queryAligned,
+                stats: stats
+            };
         }
         
         // Identify conserved regions (100% sequence identity)
@@ -6186,15 +6250,33 @@
             const resultsSection = document.getElementById('alignment-results-section');
             resultsSection.style.display = 'block';
             
+            if (!alignmentData || alignmentData.aligned.length === 0) {
+                console.error('No alignment data available');
+                return;
+            }
+            
             // Calculate average RMSD
             const avgRMSD = alignmentData.aligned.reduce((sum, a) => sum + a.rmsd, 0) / alignmentData.aligned.length;
             document.getElementById('alignment-rmsd').textContent = avgRMSD.toFixed(2);
             
-            // Count conserved and variable residues
+            // Calculate average alignment statistics
+            let totalAlignedResidues = 0;
+            let totalCoverage = 0;
+            let totalSequenceIdentity = 0;
             let conservedCount = 0;
             let variableCount = 0;
             
             alignmentData.aligned.forEach(aligned => {
+                if (aligned.alignmentStats) {
+                    totalAlignedResidues += aligned.alignmentStats.matchedAtoms || aligned.alignedCA.ref.length;
+                    totalCoverage += aligned.alignmentStats.coverage || 0;
+                    totalSequenceIdentity += aligned.alignmentStats.sequenceIdentity || 0;
+                } else {
+                    // Fallback for backward compatibility
+                    totalAlignedResidues += aligned.alignedCA.ref.length;
+                }
+                
+                // Count conserved and variable residues
                 aligned.conservation.forEach(cons => {
                     if (cons.conserved) conservedCount++;
                     else if (cons.refResidue !== '-' && cons.queryResidue !== '-') variableCount++;
@@ -6202,11 +6284,47 @@
             });
             
             // Average across all alignments
+            const avgAlignedResidues = Math.round(totalAlignedResidues / alignmentData.aligned.length);
+            const avgCoverage = (totalCoverage / alignmentData.aligned.length).toFixed(1);
+            const avgSequenceIdentity = (totalSequenceIdentity / alignmentData.aligned.length).toFixed(1);
             conservedCount = Math.round(conservedCount / alignmentData.aligned.length);
             variableCount = Math.round(variableCount / alignmentData.aligned.length);
             
+            // Update summary statistics
+            document.getElementById('aligned-residues-count').textContent = avgAlignedResidues;
+            document.getElementById('alignment-coverage').textContent = avgCoverage;
+            document.getElementById('sequence-identity').textContent = avgSequenceIdentity;
             document.getElementById('conserved-count').textContent = conservedCount;
             document.getElementById('variable-count').textContent = variableCount;
+            
+            // Display detailed statistics for each structure
+            const detailedStatsDiv = document.getElementById('detailed-alignment-stats');
+            detailedStatsDiv.innerHTML = '<div style="margin-bottom: 5px; font-weight: bold; font-size: 12px;">Per-Structure Statistics:</div>';
+            
+            alignmentData.aligned.forEach((aligned, index) => {
+                const stats = aligned.alignmentStats || {};
+                const statsDiv = document.createElement('div');
+                statsDiv.style.cssText = 'margin-bottom: 8px; padding: 6px; background: hsl(0, 0%, 100%); border: 1px solid #ddd; border-radius: 4px; font-size: 11px;';
+                
+                let statsHtml = `<div style="font-weight: bold; margin-bottom: 4px;">${aligned.file.name}:</div>`;
+                statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px;">RMSD: ${aligned.rmsd.toFixed(2)} Å</div>`;
+                
+                if (stats.matchedAtoms) {
+                    statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px;">Aligned Residues: ${stats.matchedAtoms}</div>`;
+                }
+                if (stats.coverage !== undefined) {
+                    statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px;">Coverage: ${stats.coverage.toFixed(1)}%</div>`;
+                }
+                if (stats.sequenceIdentity !== undefined) {
+                    statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px;">Sequence Identity: ${stats.sequenceIdentity.toFixed(1)}%</div>`;
+                }
+                if (stats.matchedPositions) {
+                    statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px;">Matched Positions: ${stats.matchedPositions} / ${stats.totalAligned}</div>`;
+                }
+                
+                statsDiv.innerHTML = statsHtml;
+                detailedStatsDiv.appendChild(statsDiv);
+            });
         }
         
         // Update structure toggle controls

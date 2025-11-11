@@ -2742,6 +2742,118 @@
             };
         }
         
+        // Smith-Waterman local sequence alignment
+        // Returns the best local alignment and the region boundaries in both sequences
+        function smithWaterman(seq1, seq2, matchScore = 2, mismatchScore = -1, gapPenalty = -1) {
+            const n = seq1.length;
+            const m = seq2.length;
+            
+            // Initialize scoring matrix (all zeros for local alignment)
+            const score = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
+            const traceback = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
+            
+            let maxScore = 0;
+            let maxI = 0;
+            let maxJ = 0;
+            
+            // Fill scoring matrix
+            for (let i = 1; i <= n; i++) {
+                for (let j = 1; j <= m; j++) {
+                    const match = (seq1[i - 1] === seq2[j - 1]) ? matchScore : mismatchScore;
+                    const diag = Math.max(0, score[i - 1][j - 1] + match);
+                    const up = Math.max(0, score[i - 1][j] + gapPenalty);
+                    const left = Math.max(0, score[i][j - 1] + gapPenalty);
+                    
+                    const max = Math.max(0, diag, up, left);
+                    score[i][j] = max;
+                    
+                    // Track maximum score position
+                    if (max > maxScore) {
+                        maxScore = max;
+                        maxI = i;
+                        maxJ = j;
+                    }
+                    
+                    if (max === 0) {
+                        traceback[i][j] = -1; // Stop (no alignment)
+                    } else if (max === diag) {
+                        traceback[i][j] = 0; // Diagonal
+                    } else if (max === up) {
+                        traceback[i][j] = 1; // Up
+                    } else {
+                        traceback[i][j] = 2; // Left
+                    }
+                }
+            }
+            
+            // Traceback from maximum score position
+            let i = maxI;
+            let j = maxJ;
+            const aligned1 = [];
+            const aligned2 = [];
+            const refIndices = []; // Track indices in seq1
+            const queryIndices = []; // Track indices in seq2
+            
+            // Traceback until we hit a score of 0
+            while (i > 0 && j > 0 && score[i][j] > 0) {
+                const tb = traceback[i][j];
+                
+                if (tb === 0) {
+                    // Diagonal (match/mismatch)
+                    aligned1.unshift(seq1[i - 1]);
+                    aligned2.unshift(seq2[j - 1]);
+                    refIndices.unshift(i - 1); // Store 0-based index
+                    queryIndices.unshift(j - 1); // Store 0-based index
+                    i--;
+                    j--;
+                } else if (tb === 1) {
+                    // Up (gap in seq2)
+                    aligned1.unshift(seq1[i - 1]);
+                    aligned2.unshift('-');
+                    refIndices.unshift(i - 1);
+                    queryIndices.unshift(-1); // Gap in query
+                    i--;
+                } else if (tb === 2) {
+                    // Left (gap in seq1)
+                    aligned1.unshift('-');
+                    aligned2.unshift(seq2[j - 1]);
+                    refIndices.unshift(-1); // Gap in reference
+                    queryIndices.unshift(j - 1);
+                    j--;
+                } else {
+                    // Stop condition (score is 0 or invalid traceback)
+                    break;
+                }
+            }
+            
+            // Find the boundaries of the aligned region (without leading/trailing gaps)
+            let alignedStart1 = -1, alignedEnd1 = -1;
+            let alignedStart2 = -1, alignedEnd2 = -1;
+            
+            for (let idx = 0; idx < aligned1.length; idx++) {
+                if (aligned1[idx] !== '-') {
+                    if (alignedStart1 === -1) alignedStart1 = refIndices[idx];
+                    alignedEnd1 = refIndices[idx];
+                }
+                if (aligned2[idx] !== '-') {
+                    if (alignedStart2 === -1) alignedStart2 = queryIndices[idx];
+                    alignedEnd2 = queryIndices[idx];
+                }
+            }
+            
+            return {
+                aligned1: aligned1.join(''),
+                aligned2: aligned2.join(''),
+                score: maxScore,
+                refStart: alignedStart1,
+                refEnd: alignedEnd1,
+                queryStart: alignedStart2,
+                queryEnd: alignedEnd2,
+                refIndices: refIndices,
+                queryIndices: queryIndices
+            };
+        }
+        
         // Extract CA atoms from PDB
         function extractCAAtoms(pdbContent) {
             const lines = pdbContent.split('\n');
@@ -5741,7 +5853,7 @@
                 const refSeqString = refSequence.map(s => s.residue).join('');
                 console.log(`Reference: ${refSequence.length} residues, ${refCAAtoms.length} CA atoms`);
                 
-                // Store alignment results
+                // Store alignment results (reference trimming info will be added per alignment)
                 alignmentData = {
                     reference: {
                         file: referenceFile,
@@ -5772,16 +5884,51 @@
                     const seqString = seq.map(s => s.residue).join('');
                     console.log(`Aligning ${file.name}: ${seq.length} residues, ${caAtoms.length} CA atoms`);
                     
-                    // Perform sequence alignment
-                    const seqAlignment = needlemanWunsch(refSeqString, seqString);
-                    console.log(`Sequence alignment score: ${seqAlignment.score}, aligned length: ${seqAlignment.aligned1.length}`);
+                    // Perform LOCAL sequence alignment using Smith-Waterman
+                    const localAlignment = smithWaterman(refSeqString, seqString);
+                    console.log(`Local alignment score: ${localAlignment.score}`);
+                    console.log(`Aligned region - Reference: ${localAlignment.refStart}-${localAlignment.refEnd} (${localAlignment.refEnd - localAlignment.refStart + 1} residues)`);
+                    console.log(`Aligned region - Query: ${localAlignment.queryStart}-${localAlignment.queryEnd} (${localAlignment.queryEnd - localAlignment.queryStart + 1} residues)`);
                     
-                    // Map aligned sequences to CA atoms (using only gap-free positions)
-                    // identityThreshold = 0 means no filtering by sequence identity
+                    // Validate that we found a valid alignment
+                    if (localAlignment.refStart === -1 || localAlignment.queryStart === -1 || 
+                        localAlignment.refEnd === -1 || localAlignment.queryEnd === -1) {
+                        console.warn(`No valid local alignment found for ${file.name}, skipping...`);
+                        continue;
+                    }
+                    
+                    // Extract trimmed sequences (only the aligned region)
+                    // Both sequences are trimmed to their respective aligned regions
+                    const trimmedRefSequence = refSequence.slice(localAlignment.refStart, localAlignment.refEnd + 1);
+                    const trimmedQuerySequence = seq.slice(localAlignment.queryStart, localAlignment.queryEnd + 1);
+                    const trimmedRefSeqString = trimmedRefSequence.map(s => s.residue).join('');
+                    const trimmedQuerySeqString = trimmedQuerySequence.map(s => s.residue).join('');
+                    
+                    console.log(`Trimmed sequences - Reference: ${trimmedRefSequence.length} residues (positions ${localAlignment.refStart + 1}-${localAlignment.refEnd + 1}), Query: ${trimmedQuerySequence.length} residues (positions ${localAlignment.queryStart + 1}-${localAlignment.queryEnd + 1})`);
+                    
+                    // Extract CA atoms only for the aligned regions
+                    const trimmedRefCAAtoms = extractCAAtomsForRegion(
+                        refSequence, refCAAtoms, 
+                        localAlignment.refStart, localAlignment.refEnd
+                    );
+                    const trimmedQueryCAAtoms = extractCAAtomsForRegion(
+                        seq, caAtoms,
+                        localAlignment.queryStart, localAlignment.queryEnd
+                    );
+                    
+                    console.log(`Trimmed CA atoms - Reference: ${trimmedRefCAAtoms.length}, Query: ${trimmedQueryCAAtoms.length}`);
+                    
+                    if (trimmedRefCAAtoms.length === 0 || trimmedQueryCAAtoms.length === 0) {
+                        console.warn(`No CA atoms found in aligned region for ${file.name}, skipping alignment...`);
+                        continue;
+                    }
+                    
+                    // Now map the aligned sequences (with gaps) to the trimmed CA atoms
+                    // The local alignment already has the best matching region, so we use it directly
                     const alignedCA = mapAlignedSequencesToAtoms(
-                        refCAAtoms, caAtoms, 
-                        seqAlignment.aligned1, seqAlignment.aligned2,
-                        refSequence, seq,
+                        trimmedRefCAAtoms, trimmedQueryCAAtoms,
+                        localAlignment.aligned1, localAlignment.aligned2,
+                        trimmedRefSequence, trimmedQuerySequence,
                         0  // No identity filtering - use all gap-free positions
                     );
                     
@@ -5792,10 +5939,11 @@
                     
                     // Validation checks
                     const MIN_ALIGNED_RESIDUES = 50;  // Minimum number of aligned residues
-                    const MIN_COVERAGE = 70.0;        // Minimum coverage percentage of shorter sequence
                     const stats = alignedCA.stats;
                     
                     console.log(`\n=== Alignment Statistics for ${file.name} ===`);
+                    console.log(`  Aligned region - Reference: positions ${localAlignment.refStart + 1}-${localAlignment.refEnd + 1} (${localAlignment.refEnd - localAlignment.refStart + 1} residues)`);
+                    console.log(`  Aligned region - Query: positions ${localAlignment.queryStart + 1}-${localAlignment.queryEnd + 1} (${localAlignment.queryEnd - localAlignment.queryStart + 1} residues)`);
                     console.log(`  Matched atom pairs: ${alignedCA.ref.length}`);
                     console.log(`  Total aligned positions: ${stats.totalAligned}`);
                     console.log(`  Matched positions (no gaps): ${stats.matchedPositions}`);
@@ -5811,12 +5959,6 @@
                         // Continue anyway, but log the warning
                     }
                     
-                    if (stats.coverage < MIN_COVERAGE) {
-                        console.warn(`WARNING: Coverage is ${stats.coverage.toFixed(1)}% (minimum: ${MIN_COVERAGE}%).`);
-                        console.warn(`  Large portions of the sequences are not aligned.`);
-                        // Continue anyway, but log the warning
-                    }
-                    
                     // Perform structural alignment using Kabsch algorithm (single pass - optimal solution)
                     console.log(`\nPerforming structural alignment with ${alignedCA.ref.length} atom pairs...`);
                     const transformation = kabschAlgorithm(alignedCA.ref, alignedCA.query);
@@ -5828,27 +5970,44 @@
                     console.log(`  RMSD: ${rmsd.toFixed(2)} Å`);
                     console.log(`=== End Alignment Statistics ===\n`);
                     
-                    // Apply transformation to ALL atoms (not just CA)
+                    // Apply transformation to ALL atoms in the query structure (for visualization)
+                    // The transformation was calculated from the trimmed region, but we apply it to the full structure
                     const transformedAtoms = applyTransformation(caAtoms, transformation.rotation, transformation.translation);
                     
-                    // Identify conserved regions (100% sequence identity)
+                    // Identify conserved regions (100% sequence identity) in the aligned region
                     const conservation = identifyConservedRegions(
-                        seqAlignment.aligned1, 
-                        seqAlignment.aligned2
+                        localAlignment.aligned1, 
+                        localAlignment.aligned2
                     );
                     
+                    // Store alignment information including trimming details
                     alignmentData.aligned.push({
                         file: file,
                         sequence: seq,
                         seqString: seqString,
+                        trimmedSequence: trimmedQuerySequence,
+                        trimmedSeqString: trimmedQuerySeqString,
                         caAtoms: caAtoms,
+                        trimmedCAAtoms: trimmedQueryCAAtoms,
                         transformedAtoms: transformedAtoms,
                         transformation: transformation,
-                        sequenceAlignment: seqAlignment,
+                        sequenceAlignment: {
+                            aligned1: localAlignment.aligned1,
+                            aligned2: localAlignment.aligned2,
+                            score: localAlignment.score
+                        },
                         rmsd: rmsd,
                         conservation: conservation,
                         alignedCA: alignedCA,
-                        alignmentStats: stats  // Include statistics for display
+                        alignmentStats: stats,
+                        alignmentRegion: {
+                            refStart: localAlignment.refStart,
+                            refEnd: localAlignment.refEnd,
+                            queryStart: localAlignment.queryStart,
+                            queryEnd: localAlignment.queryEnd,
+                            refTrimmedLength: trimmedRefSequence.length,
+                            queryTrimmedLength: trimmedQuerySequence.length
+                        }
                     });
                 }
                 
@@ -5912,6 +6071,45 @@
                 sequenceIdentity: sequenceIdentity,
                 shorterSeqLength: shorterSeqLength
             };
+        }
+        
+        // Extract CA atoms for a specific region of a sequence (by sequence index range)
+        // sequence: array of sequence objects with residue, number, chain, name
+        // caAtoms: array of CA atom objects
+        // startIdx: start index in sequence (0-based, inclusive)
+        // endIdx: end index in sequence (0-based, inclusive)
+        function extractCAAtomsForRegion(sequence, caAtoms, startIdx, endIdx) {
+            if (startIdx < 0 || endIdx >= sequence.length || startIdx > endIdx) {
+                console.warn(`Invalid region: startIdx=${startIdx}, endIdx=${endIdx}, sequence length=${sequence.length}`);
+                return [];
+            }
+            
+            // Create map from (chain, residueNumber) to CA atom
+            const atomMap = new Map();
+            caAtoms.forEach((atom) => {
+                const key = `${atom.chainId || 'A'}_${atom.residueNumber}`;
+                if (!atomMap.has(key)) {
+                    atomMap.set(key, atom);
+                }
+            });
+            
+            // Extract atoms for the specified region
+            const regionAtoms = [];
+            for (let i = startIdx; i <= endIdx; i++) {
+                const residue = sequence[i];
+                if (!residue) continue;
+                
+                const key = `${residue.chain || 'A'}_${residue.number}`;
+                const atom = atomMap.get(key);
+                
+                if (atom) {
+                    regionAtoms.push(atom);
+                } else {
+                    console.warn(`No CA atom found for residue ${residue.number} chain ${residue.chain} at sequence position ${i}`);
+                }
+            }
+            
+            return regionAtoms;
         }
         
         // Map aligned sequences to CA atoms
@@ -5992,8 +6190,8 @@
                     if (identityThreshold > 0) {
                         // Filter: only include if residues are identical
                         if (isIdentical) {
-                            refAligned.push(refAtom);
-                            queryAligned.push(queryAtom);
+                    refAligned.push(refAtom);
+                    queryAligned.push(queryAtom);
                         }
                     } else {
                         // No filtering: include all matched positions
@@ -6303,11 +6501,19 @@
             
             alignmentData.aligned.forEach((aligned, index) => {
                 const stats = aligned.alignmentStats || {};
+                const region = aligned.alignmentRegion || {};
                 const statsDiv = document.createElement('div');
                 statsDiv.style.cssText = 'margin-bottom: 8px; padding: 6px; background: hsl(0, 0%, 100%); border: 1px solid #ddd; border-radius: 4px; font-size: 11px;';
                 
                 let statsHtml = `<div style="font-weight: bold; margin-bottom: 4px;">${aligned.file.name}:</div>`;
                 statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px;">RMSD: ${aligned.rmsd.toFixed(2)} Å</div>`;
+                
+                if (region.refStart !== undefined && region.refEnd !== undefined) {
+                    statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px; color: hsl(220, 9%, 46%);">Reference region: ${region.refStart + 1}-${region.refEnd + 1} (${region.refTrimmedLength} residues)</div>`;
+                }
+                if (region.queryStart !== undefined && region.queryEnd !== undefined) {
+                    statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px; color: hsl(220, 9%, 46%);">Query region: ${region.queryStart + 1}-${region.queryEnd + 1} (${region.queryTrimmedLength} residues)</div>`;
+                }
                 
                 if (stats.matchedAtoms) {
                     statsHtml += `<div style="margin-left: 10px; margin-bottom: 2px;">Aligned Residues: ${stats.matchedAtoms}</div>`;
@@ -6378,21 +6584,47 @@
             
             let html = '';
             
-            // Display reference sequence
-            html += `<div class="sequence-alignment-line" style="font-weight: bold;">Reference: ${alignmentData.reference.file.name}</div>`;
-            html += formatAlignedSequence(alignmentData.reference.seqString, alignmentData.aligned[0]?.sequenceAlignment.aligned1 || '', true);
+            // Display alignment information header
+            html += `<div style="margin-bottom: 10px; padding: 8px; background: hsl(210, 40%, 98%); border-radius: 4px; font-size: 11px;">`;
+            html += `<div style="font-weight: bold; margin-bottom: 4px;">Local Alignment (Smith-Waterman)</div>`;
+            html += `<div style="margin-left: 10px; color: hsl(220, 9%, 46%);">Only the aligned regions are shown below. Extra residues outside the aligned region have been trimmed.</div>`;
+            html += `</div>`;
             
-            // Display aligned sequences
+            // Display reference sequence (trimmed to aligned region)
+            if (alignmentData.aligned.length > 0) {
+                const firstAligned = alignmentData.aligned[0];
+                const refRegion = firstAligned.alignmentRegion;
+                
+                html += `<div class="sequence-alignment-line" style="font-weight: bold; margin-top: 10px;">`;
+                html += `Reference: ${alignmentData.reference.file.name} `;
+                if (refRegion) {
+                    html += `<span style="font-weight: normal; color: hsl(220, 9%, 46%); font-size: 11px;">(positions ${refRegion.refStart + 1}-${refRegion.refEnd + 1} of ${alignmentData.reference.sequence.length} total)</span>`;
+                }
+                html += `</div>`;
+                html += formatAlignedSequence('', firstAligned.sequenceAlignment.aligned1, true, firstAligned.conservation);
+                
+                // Display aligned sequences (trimmed)
             alignmentData.aligned.forEach((aligned, idx) => {
-                html += `<div class="sequence-alignment-line" style="font-weight: bold; margin-top: 10px;">${aligned.file.name}</div>`;
-                html += formatAlignedSequence(aligned.seqString, aligned.sequenceAlignment.aligned2, false, aligned.conservation);
-            });
+                    const region = aligned.alignmentRegion;
+                    html += `<div class="sequence-alignment-line" style="font-weight: bold; margin-top: 10px;">`;
+                    html += `${aligned.file.name} `;
+                    if (region) {
+                        html += `<span style="font-weight: normal; color: hsl(220, 9%, 46%); font-size: 11px;">(positions ${region.queryStart + 1}-${region.queryEnd + 1} of ${aligned.sequence.length} total)</span>`;
+                    }
+                    html += `</div>`;
+                    html += formatAlignedSequence('', aligned.sequenceAlignment.aligned2, false, aligned.conservation);
+                });
+            } else {
+                // Fallback if no alignment data
+                html += `<div class="sequence-alignment-line" style="font-weight: bold;">Reference: ${alignmentData.reference.file.name}</div>`;
+                html += formatAlignedSequence(alignmentData.reference.seqString, '', true);
+            }
             
             alignmentDisplay.innerHTML = html;
             
             // Add click handlers for interactive highlighting
             alignmentDisplay.querySelectorAll('.sequence-alignment-line').forEach((line, idx) => {
-                if (idx > 0 && idx % 2 === 1) { // Skip header lines
+                if (idx > 1 && (idx - 1) % 2 === 1) { // Skip header lines and info box
                     line.addEventListener('click', () => {
                         // Highlight corresponding region in 3D view
                         highlightRegionIn3D(idx);

@@ -5935,15 +5935,63 @@
                         continue;
                     }
                     
+                    // Debug: Check B-factor availability
+                    const refWithBFactor = trimmedRefCAAtoms.filter(a => a.bFactor !== null && a.bFactor !== undefined).length;
+                    const queryWithBFactor = trimmedQueryCAAtoms.filter(a => a.bFactor !== null && a.bFactor !== undefined).length;
+                    console.log(`B-factor data: Reference has ${refWithBFactor}/${trimmedRefCAAtoms.length} atoms with B-factor, Query has ${queryWithBFactor}/${trimmedQueryCAAtoms.length}`);
+                    
+                    if (refWithBFactor > 0) {
+                        const refBFactors = trimmedRefCAAtoms.filter(a => a.bFactor !== null && a.bFactor !== undefined).map(a => a.bFactor);
+                        console.log(`  Reference B-factor range: ${Math.min(...refBFactors).toFixed(1)} - ${Math.max(...refBFactors).toFixed(1)}`);
+                    }
+                    if (queryWithBFactor > 0) {
+                        const queryBFactors = trimmedQueryCAAtoms.filter(a => a.bFactor !== null && a.bFactor !== undefined).map(a => a.bFactor);
+                        console.log(`  Query B-factor range: ${Math.min(...queryBFactors).toFixed(1)} - ${Math.max(...queryBFactors).toFixed(1)}`);
+                    }
+                    
                     // Filter by B-factor to use only high-confidence atoms for alignment
                     // Lower B-factor = higher confidence (typical range: 20-100, < 50 is very good)
-                    const MAX_B_FACTOR = 80;  // Only use atoms with B-factor <= 80
-                    const refFiltered = filterAtomsByBFactor(trimmedRefCAAtoms, MAX_B_FACTOR);
-                    const queryFiltered = filterAtomsByBFactor(trimmedQueryCAAtoms, MAX_B_FACTOR);
+                    // Use adaptive threshold: if too many atoms are filtered, use a more lenient threshold
+                    let MAX_B_FACTOR = 80;  // Start with a reasonable threshold
+                    let refFiltered = filterAtomsByBFactor(trimmedRefCAAtoms, MAX_B_FACTOR);
+                    let queryFiltered = filterAtomsByBFactor(trimmedQueryCAAtoms, MAX_B_FACTOR);
                     
-                    console.log(`B-factor filtering (max=${MAX_B_FACTOR}):`);
+                    console.log(`B-factor filtering (initial threshold=${MAX_B_FACTOR}):`);
                     console.log(`  Reference: ${refFiltered.kept}/${refFiltered.total} atoms kept (${refFiltered.filteredOut} filtered out)`);
                     console.log(`  Query: ${queryFiltered.kept}/${queryFiltered.total} atoms kept (${queryFiltered.filteredOut} filtered out)`);
+                    
+                    // Adaptive threshold: if we're filtering out too many atoms, relax the threshold
+                    const MIN_ATOMS_REQUIRED = Math.min(trimmedRefCAAtoms.length, trimmedQueryCAAtoms.length) * 0.3; // Need at least 30% of atoms
+                    
+                    if (refFiltered.kept < MIN_ATOMS_REQUIRED || queryFiltered.kept < MIN_ATOMS_REQUIRED) {
+                        console.warn(`Too many atoms filtered out. Relaxing B-factor threshold...`);
+                        
+                        // Try progressively higher thresholds until we have enough atoms
+                        const thresholds = [100, 150, 200, 300, Infinity];
+                        let foundThreshold = false;
+                        
+                        for (const threshold of thresholds) {
+                            refFiltered = filterAtomsByBFactor(trimmedRefCAAtoms, threshold);
+                            queryFiltered = filterAtomsByBFactor(trimmedQueryCAAtoms, threshold);
+                            
+                            console.log(`  Trying threshold=${threshold}: Ref=${refFiltered.kept}, Query=${queryFiltered.kept}`);
+                            
+                            if (refFiltered.kept >= MIN_ATOMS_REQUIRED && queryFiltered.kept >= MIN_ATOMS_REQUIRED) {
+                                MAX_B_FACTOR = threshold;
+                                foundThreshold = true;
+                                console.log(`  Using threshold=${threshold} (Ref: ${refFiltered.kept}, Query: ${queryFiltered.kept})`);
+                                break;
+                            }
+                        }
+                        
+                        // If even with no threshold we don't have enough, disable filtering
+                        if (!foundThreshold || MAX_B_FACTOR === Infinity) {
+                            console.warn(`B-factor filtering disabled - using all atoms regardless of B-factor`);
+                            // Create maps with all atoms (no filtering)
+                            refFiltered = { filtered: trimmedRefCAAtoms, kept: trimmedRefCAAtoms.length, total: trimmedRefCAAtoms.length, filteredOut: 0 };
+                            queryFiltered = { filtered: trimmedQueryCAAtoms, kept: trimmedQueryCAAtoms.length, total: trimmedQueryCAAtoms.length, filteredOut: 0 };
+                        }
+                    }
                     
                     // Create maps for filtered atoms (for faster lookup in mapping function)
                     const refFilteredMap = new Map();
@@ -5959,7 +6007,7 @@
                     });
                     
                     // Now map the aligned sequences (with gaps) to the filtered CA atoms
-                    // Only use atoms that passed B-factor filtering
+                    // Only use atoms that passed B-factor filtering (if enabled)
                     const alignedCA = mapAlignedSequencesToAtomsWithFilter(
                         trimmedRefSequence, trimmedQuerySequence,
                         localAlignment.aligned1, localAlignment.aligned2,

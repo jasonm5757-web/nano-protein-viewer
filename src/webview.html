@@ -2867,6 +2867,8 @@
                     const z = parseFloat(line.substring(46, 54));
                     const residueNumber = parseInt(line.substring(22, 26).trim());
                     const chainId = line.substring(21, 22).trim() || 'A';
+                    // B-factor is in columns 60-66 (0-indexed: 60-65)
+                    const bFactor = parseFloat(line.substring(60, 66).trim());
                     
                     if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !isNaN(residueNumber)) {
                         const key = `${chainId}_${residueNumber}`;
@@ -2875,7 +2877,8 @@
                             atomMap.set(key, {
                                 x, y, z,
                                 residueNumber,
-                                chainId
+                                chainId,
+                                bFactor: isNaN(bFactor) ? null : bFactor  // null if B-factor not available
                             });
                         }
                     }
@@ -2941,8 +2944,17 @@
                                     const residueNumber = parseInt(fields[labelSeqIdIdx]);
                                     const chainId = labelAsymIdIdx !== undefined ? fields[labelAsymIdIdx] : 'A';
                                     
+                                    // Try to extract B-factor (B_iso_or_equiv or B_iso)
+                                    const bIsoIdx = columnIndices['B_iso_or_equiv'] !== undefined ? 
+                                                   columnIndices['B_iso_or_equiv'] : columnIndices['B_iso'];
+                                    let bFactor = null;
+                                    if (bIsoIdx !== undefined && fields[bIsoIdx] !== undefined) {
+                                        bFactor = parseFloat(fields[bIsoIdx]);
+                                        if (isNaN(bFactor)) bFactor = null;
+                                    }
+                                    
                                     if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !isNaN(residueNumber)) {
-                                        atoms.push({ x, y, z, residueNumber, chainId });
+                                        atoms.push({ x, y, z, residueNumber, chainId, bFactor: bFactor });
                                     }
                                 }
                             }
@@ -5923,12 +5935,35 @@
                         continue;
                     }
                     
-                    // Now map the aligned sequences (with gaps) to the trimmed CA atoms
-                    // The local alignment already has the best matching region, so we use it directly
-                    const alignedCA = mapAlignedSequencesToAtoms(
-                        trimmedRefCAAtoms, trimmedQueryCAAtoms,
-                        localAlignment.aligned1, localAlignment.aligned2,
+                    // Filter by B-factor to use only high-confidence atoms for alignment
+                    // Lower B-factor = higher confidence (typical range: 20-100, < 50 is very good)
+                    const MAX_B_FACTOR = 80;  // Only use atoms with B-factor <= 80
+                    const refFiltered = filterAtomsByBFactor(trimmedRefCAAtoms, MAX_B_FACTOR);
+                    const queryFiltered = filterAtomsByBFactor(trimmedQueryCAAtoms, MAX_B_FACTOR);
+                    
+                    console.log(`B-factor filtering (max=${MAX_B_FACTOR}):`);
+                    console.log(`  Reference: ${refFiltered.kept}/${refFiltered.total} atoms kept (${refFiltered.filteredOut} filtered out)`);
+                    console.log(`  Query: ${queryFiltered.kept}/${queryFiltered.total} atoms kept (${queryFiltered.filteredOut} filtered out)`);
+                    
+                    // Create maps for filtered atoms (for faster lookup in mapping function)
+                    const refFilteredMap = new Map();
+                    refFiltered.filtered.forEach(atom => {
+                        const key = `${atom.chainId || 'A'}_${atom.residueNumber}`;
+                        refFilteredMap.set(key, atom);
+                    });
+                    
+                    const queryFilteredMap = new Map();
+                    queryFiltered.filtered.forEach(atom => {
+                        const key = `${atom.chainId || 'A'}_${atom.residueNumber}`;
+                        queryFilteredMap.set(key, atom);
+                    });
+                    
+                    // Now map the aligned sequences (with gaps) to the filtered CA atoms
+                    // Only use atoms that passed B-factor filtering
+                    const alignedCA = mapAlignedSequencesToAtomsWithFilter(
                         trimmedRefSequence, trimmedQuerySequence,
+                        localAlignment.aligned1, localAlignment.aligned2,
+                        refFilteredMap, queryFilteredMap,
                         0  // No identity filtering - use all gap-free positions
                     );
                     
@@ -6073,6 +6108,38 @@
             };
         }
         
+        // Filter CA atoms by B-factor threshold
+        // atoms: array of CA atom objects with bFactor property
+        // maxBFactor: maximum B-factor to include (default: 80, typical range: 20-100)
+        // Returns filtered atoms and statistics
+        function filterAtomsByBFactor(atoms, maxBFactor = 80) {
+            const filtered = [];
+            let totalWithBFactor = 0;
+            let filteredOut = 0;
+            
+            for (const atom of atoms) {
+                if (atom.bFactor === null || atom.bFactor === undefined) {
+                    // If B-factor is not available, include it (assume it's good)
+                    filtered.push(atom);
+                } else {
+                    totalWithBFactor++;
+                    if (atom.bFactor <= maxBFactor) {
+                        filtered.push(atom);
+                    } else {
+                        filteredOut++;
+                    }
+                }
+            }
+            
+            return {
+                filtered: filtered,
+                total: atoms.length,
+                withBFactor: totalWithBFactor,
+                filteredOut: filteredOut,
+                kept: filtered.length
+            };
+        }
+        
         // Extract CA atoms for a specific region of a sequence (by sequence index range)
         // sequence: array of sequence objects with residue, number, chain, name
         // caAtoms: array of CA atom objects
@@ -6110,6 +6177,93 @@
             }
             
             return regionAtoms;
+        }
+        
+        // Map aligned sequences to CA atoms using pre-filtered atom maps
+        // This version uses pre-filtered atom maps (e.g., filtered by B-factor)
+        // refSeq, querySeq: trimmed sequence arrays
+        // alignedRef, alignedQuery: aligned sequence strings with gaps
+        // refAtomMap, queryAtomMap: Maps from (chain_residueNumber) to CA atom (pre-filtered)
+        // identityThreshold: optional sequence identity filtering (0 = no filtering)
+        function mapAlignedSequencesToAtomsWithFilter(refSeq, querySeq, alignedRef, alignedQuery, refAtomMap, queryAtomMap, identityThreshold = 0) {
+            const refAligned = [];
+            const queryAligned = [];
+            let refSeqIdx = 0;  // Index in trimmed refSeq array
+            let querySeqIdx = 0; // Index in trimmed querySeq array
+            
+            // Map aligned sequences to atoms
+            for (let i = 0; i < alignedRef.length; i++) {
+                // Check if residues are identical (for identity filtering)
+                const refChar = alignedRef[i];
+                const queryChar = alignedQuery[i];
+                const isIdentical = (refChar !== '-' && queryChar !== '-' && refChar === queryChar);
+                
+                let refAtom = null;
+                let queryAtom = null;
+                
+                // Process reference sequence position
+                if (refChar !== '-') {
+                    if (refSeqIdx < refSeq.length) {
+                        const refResidue = refSeq[refSeqIdx];
+                        const refKey = `${refResidue.chain || 'A'}_${refResidue.number}`;
+                        refAtom = refAtomMap.get(refKey);
+                        
+                        if (!refAtom) {
+                            // Atom was filtered out (e.g., by B-factor) or not found
+                            // Skip this position
+                        }
+                        
+                        refSeqIdx++;
+                    }
+                }
+                
+                // Process query sequence position
+                if (queryChar !== '-') {
+                    if (querySeqIdx < querySeq.length) {
+                        const queryResidue = querySeq[querySeqIdx];
+                        const queryKey = `${queryResidue.chain || 'A'}_${queryResidue.number}`;
+                        queryAtom = queryAtomMap.get(queryKey);
+                        
+                        if (!queryAtom) {
+                            // Atom was filtered out (e.g., by B-factor) or not found
+                            // Skip this position
+                        }
+                        
+                        querySeqIdx++;
+                    }
+                }
+                
+                // Only include positions where both have atoms (no gaps, and both passed filtering)
+                if (refAtom && queryAtom) {
+                    if (identityThreshold > 0) {
+                        // Filter: only include if residues are identical
+                        if (isIdentical) {
+                            refAligned.push(refAtom);
+                            queryAligned.push(queryAtom);
+                        }
+                    } else {
+                        // No filtering: include all matched positions
+                        refAligned.push(refAtom);
+                        queryAligned.push(queryAtom);
+                    }
+                }
+            }
+            
+            if (refAligned.length === 0) {
+                throw new Error('No matching atoms found after filtering. Try increasing B-factor threshold or check that structures have valid CA atoms.');
+            }
+            
+            // Calculate statistics
+            const stats = calculateAlignmentStats(alignedRef, alignedQuery, refSeq, querySeq);
+            stats.matchedAtoms = refAligned.length;
+            
+            console.log(`Successfully mapped ${refAligned.length} atom pairs (after B-factor filtering)`);
+            
+            return { 
+                ref: refAligned, 
+                query: queryAligned,
+                stats: stats
+            };
         }
         
         // Map aligned sequences to CA atoms

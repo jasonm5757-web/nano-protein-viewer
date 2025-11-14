@@ -6469,6 +6469,10 @@
             return conservation;
         }
         
+        // Global map to store conservation maps by structure index
+        // Key: structure index in Molstar, Value: conservation map
+        const structureConservationMaps = new Map();
+        
         // Visualize aligned structures in Molstar
         async function visualizeAlignedStructures() {
             if (!viewer || !alignmentData) return;
@@ -6476,32 +6480,48 @@
             await viewer.plugin.clear();
             alignedStructures = [];
             structureVisibility.clear();
+            structureConservationMaps.clear(); // Clear previous maps
             
             const plugin = viewer.plugin;
             
             // Build conservation map for reference structure
             // Conservation is based on the first aligned structure's conservation data
             const firstAligned = alignmentData.aligned[0];
-            const refConservationMap = new Map(); // Map from aligned position to conservation status
+            const refConservationMap = new Map(); // Map from chain_residueNumber to conservation status
             
-            if (firstAligned && firstAligned.conservation) {
-                // Map aligned positions to conservation status
-                // We need to map from sequence alignment positions to actual residue numbers
+            if (firstAligned && firstAligned.conservation && firstAligned.alignmentRegion) {
+                // Use the trimmed reference sequence (aligned region only)
+                // Get the reference region boundaries
+                const refRegion = firstAligned.alignmentRegion;
+                const trimmedRefSequence = alignmentData.reference.sequence.slice(
+                    refRegion.refStart, 
+                    refRegion.refEnd + 1
+                );
+                
+                // Map aligned positions to conservation status using trimmed sequence
                 const alignedRef = firstAligned.sequenceAlignment.aligned1;
-                let refSeqIdx = 0;
+                let trimmedRefSeqIdx = 0; // Index in trimmed reference sequence
                 
                 for (let i = 0; i < alignedRef.length; i++) {
                     if (alignedRef[i] !== '-') {
-                        // This position in the alignment corresponds to a residue
-                        const refResidue = alignmentData.reference.sequence[refSeqIdx];
-                        if (refResidue) {
-                            const key = `${refResidue.chain || 'A'}_${refResidue.number}`;
-                            const isConserved = firstAligned.conservation[i] && firstAligned.conservation[i].conserved;
-                            refConservationMap.set(key, isConserved);
+                        // This position in the alignment corresponds to a residue in trimmed sequence
+                        if (trimmedRefSeqIdx < trimmedRefSequence.length) {
+                            const refResidue = trimmedRefSequence[trimmedRefSeqIdx];
+                            if (refResidue) {
+                                const key = `${refResidue.chain || 'A'}_${refResidue.number}`;
+                                const isConserved = firstAligned.conservation[i] && firstAligned.conservation[i].conserved;
+                                refConservationMap.set(key, isConserved);
+                            }
+                            trimmedRefSeqIdx++;
                         }
-                        refSeqIdx++;
                     }
                 }
+            }
+            
+            console.log(`Reference conservation map size: ${refConservationMap.size}`);
+            if (refConservationMap.size > 0) {
+                const sampleKeys = Array.from(refConservationMap.keys()).slice(0, 5);
+                console.log(`Sample reference conservation keys: ${sampleKeys.join(', ')}`);
             }
             
             // Load reference structure
@@ -6512,9 +6532,16 @@
             const refStructure = await plugin.builders.structure.hierarchy.applyPreset(refTrajectory, 'default');
             URL.revokeObjectURL(refUrl);
             
+            // Get structure index for reference
+            const refStructures = plugin.managers.structure.hierarchy.current.structures;
+            const refStructureIndex = refStructures.length > 0 ? refStructures.length - 1 : 0;
+            structureConservationMaps.set(refStructureIndex, refConservationMap);
+            console.log(`Stored reference conservation map at index ${refStructureIndex} for ${alignmentData.reference.file.name}`);
+            
             alignedStructures.push({
                 name: alignmentData.reference.file.name,
                 structure: refStructure,
+                structureIndex: refStructureIndex,
                 isReference: true,
                 visible: true,
                 conservationMap: refConservationMap
@@ -6533,6 +6560,10 @@
                     const trajectory = await plugin.builders.structure.parseTrajectory(data, aligned.file.format);
                     const structure = await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
                     URL.revokeObjectURL(url);
+                    
+                    // Get structure index for query
+                    const queryStructures = plugin.managers.structure.hierarchy.current.structures;
+                    const queryStructureIndex = queryStructures.length > 0 ? queryStructures.length - 1 : 0;
                     
                     // Build conservation map for query structure
                     const queryConservationMap = new Map();
@@ -6553,9 +6584,19 @@
                         }
                     }
                     
+                    console.log(`Query conservation map size: ${queryConservationMap.size} for ${aligned.file.name}`);
+                    if (queryConservationMap.size > 0) {
+                        const sampleKeys = Array.from(queryConservationMap.keys()).slice(0, 5);
+                        console.log(`Sample query conservation keys: ${sampleKeys.join(', ')}`);
+                    }
+                    
+                    structureConservationMaps.set(queryStructureIndex, queryConservationMap);
+                    console.log(`Stored query conservation map at index ${queryStructureIndex} for ${aligned.file.name}`);
+                    
                     alignedStructures.push({
                         name: aligned.file.name,
                         structure: structure,
+                        structureIndex: queryStructureIndex,
                         isReference: false,
                         visible: true,
                         conservation: aligned.conservation,
@@ -6566,6 +6607,11 @@
                     console.error(`Error loading aligned structure ${aligned.file.name}:`, error);
                 }
             }
+            
+            // Verify structures are loaded
+            const allStructures = plugin.managers.structure.hierarchy.current.structures;
+            console.log(`Total structures loaded: ${allStructures.length}`);
+            console.log(`Conservation maps stored: ${structureConservationMaps.size}`);
             
             // Apply conservation-based coloring to all structures
             await applyConservationColoring();
@@ -6590,7 +6636,9 @@
                     return;
                 }
                 
-                console.log('Applying conservation-based coloring');
+                console.log(`Applying conservation-based coloring to ${structures.length} structures`);
+                console.log(`Available conservation maps: ${structureConservationMaps.size}`);
+                console.log(`Conservation map keys: ${Array.from(structureConservationMaps.keys()).join(', ')}`);
                 
                 // Create unique theme name
                 const themeName = `conservation-alignment-${Math.random().toString(36).substring(7)}`;
@@ -6603,6 +6651,7 @@
                     factory: (ctx, props) => {
                         const structure = ctx.structure;
                         if (!structure || !structure.models || structure.models.length === 0) {
+                            console.warn('No structure models in context');
                             return {
                                 factory: ConservationColorThemeProvider.factory,
                                 granularity: 'group',
@@ -6611,28 +6660,53 @@
                             };
                         }
                         
-                        // Find the conservation map for this structure
-                        let conservationMap = null;
-                        const structureName = structure.cell?.transform?.ref || '';
+                        // Find structure index by matching structure object
+                        let structureIndex = -1;
+                        const currentStructures = plugin.managers.structure.hierarchy.current.structures;
                         
-                        for (const alignedStruct of alignedStructures) {
-                            if (alignedStruct.name === structureName || 
-                                structureName.includes(alignedStruct.name)) {
-                                conservationMap = alignedStruct.conservationMap;
+                        for (let i = 0; i < currentStructures.length; i++) {
+                            if (currentStructures[i] === structure) {
+                                structureIndex = i;
                                 break;
                             }
                         }
                         
-                        // If no conservation map found, use gray
-                        if (!conservationMap || conservationMap.size === 0) {
-                            console.warn(`No conservation map found for structure: ${structureName}`);
-                            return {
-                                factory: ConservationColorThemeProvider.factory,
-                                granularity: 'group',
-                                color: () => 0x808080,
-                                props: props
-                            };
+                        // If still not found, try matching by structure cell
+                        if (structureIndex === -1 && structure.cell) {
+                            for (let i = 0; i < currentStructures.length; i++) {
+                                if (currentStructures[i].cell === structure.cell) {
+                                    structureIndex = i;
+                                    break;
+                                }
+                            }
                         }
+                        
+                        // Get conservation map for this structure index
+                        const conservationMap = structureIndex >= 0 ? structureConservationMaps.get(structureIndex) : null;
+                        
+                        if (!conservationMap || conservationMap.size === 0) {
+                            console.warn(`No conservation map found for structure index ${structureIndex}`);
+                            // Fallback: use different colors for reference vs query so we can see both structures
+                            if (structureIndex === 0) {
+                                console.log(`Using fallback blue color for structure index ${structureIndex} (reference)`);
+                                return {
+                                    factory: ConservationColorThemeProvider.factory,
+                                    granularity: 'group',
+                                    color: () => 0x4A90E2, // Blue for reference (fallback)
+                                    props: props
+                                };
+                            } else {
+                                console.log(`Using fallback red color for structure index ${structureIndex} (query)`);
+                                return {
+                                    factory: ConservationColorThemeProvider.factory,
+                                    granularity: 'group',
+                                    color: () => 0xE24A4A, // Red for query (fallback)
+                                    props: props
+                                };
+                            }
+                        }
+                        
+                        console.log(`Using conservation map for structure index ${structureIndex} (${conservationMap.size} entries)`);
                         
                         return {
                             factory: ConservationColorThemeProvider.factory,
@@ -6647,21 +6721,22 @@
                                     
                                     // Get residue information
                                     const seqId = unit.model.atomicHierarchy.residues.label_seq_id.value(residueIndex);
-                                    const chainId = unit.model.atomicHierarchy.chains.label_asym_id.value(
-                                        unit.model.atomicHierarchy.residues.chainKey.value(residueIndex)
-                                    ) || 'A';
+                                    const chainKey = unit.model.atomicHierarchy.residues.chainKey.value(residueIndex);
+                                    const chainId = unit.model.atomicHierarchy.chains.label_asym_id.value(chainKey) || 'A';
                                     
                                     // Look up conservation status
                                     const key = `${chainId}_${seqId}`;
                                     const isConserved = conservationMap.get(key);
                                     
-                                    // Color scheme: conserved = green/blue, variable = red/orange
+                                    // Color scheme: conserved = green, variable = orange
                                     if (isConserved === true) {
                                         return 0x00FF00; // Green for conserved
                                     } else if (isConserved === false) {
                                         return 0xFF6600; // Orange for variable
                                     } else {
-                                        return 0x808080; // Gray for unknown/unaligned
+                                        // Not found in conservation map - might be outside aligned region
+                                        // Use a light gray
+                                        return 0xC0C0C0; // Light gray for unaligned
                                     }
                                 } catch (error) {
                                     console.warn('Error getting conservation color:', error);
@@ -6669,7 +6744,7 @@
                                 }
                             },
                             props: props,
-                            description: 'Conservation-based coloring: Green = conserved, Orange = variable'
+                            description: 'Conservation-based coloring: Green = conserved, Orange = variable, Light gray = unaligned'
                         };
                     },
                     getParams: () => ({}),
@@ -6682,12 +6757,17 @@
                 console.log(`Registered conservation theme: ${themeName}`);
                 
                 // Apply the theme to all aligned structures
-                for (const structure of structures) {
+                for (let i = 0; i < structures.length; i++) {
+                    const structure = structures[i];
+                    const hasMap = structureConservationMaps.has(i);
+                    console.log(`Structure ${i}: has conservation map = ${hasMap}`);
+                    
                     if (structure.components && structure.components.length > 0) {
                         await plugin.managers.structure.component.updateRepresentationsTheme(
                             structure.components,
                             { color: themeName }
                         );
+                        console.log(`Applied conservation theme to structure ${i}`);
                     }
                 }
                 
@@ -6695,6 +6775,7 @@
                 
             } catch (error) {
                 console.error('Error applying conservation coloring:', error);
+                console.error(error.stack);
             }
         }
         

@@ -2267,6 +2267,7 @@
                     displayDiffusionStep(currentStepIndex, false);
                     
                     updateFileHistory();
+                    updateReferenceStructureDropdown(); // Update alignment dropdown
                     initializeAnimationControls();
                 }
                 
@@ -6474,6 +6475,10 @@
         // Key: structure file name, Value: conservation map
         const structureConservationMaps = new Map();
         
+        // Global map to store structure index to name mapping
+        // Key: structure index in Molstar hierarchy, Value: structure file name
+        const structureIndexToName = new Map();
+        
         // Visualize aligned structures in Molstar
         async function visualizeAlignedStructures() {
             if (!viewer || !alignmentData) return;
@@ -6482,6 +6487,7 @@
             alignedStructures = [];
             structureVisibility.clear();
             structureConservationMaps.clear(); // Clear previous maps
+            structureIndexToName.clear(); // Clear index to name mapping
             
             const plugin = viewer.plugin;
             
@@ -6542,6 +6548,8 @@
             
             // Store conservation map by structure name instead of index
             structureConservationMaps.set(alignmentData.reference.file.name, refConservationMap);
+            // Store index to name mapping for reliable lookup
+            structureIndexToName.set(refStructureIndex, alignmentData.reference.file.name);
             console.log(`Stored reference conservation map for ${alignmentData.reference.file.name} (structure index: ${refStructureIndex})`);
             
             alignedStructures.push({
@@ -6557,10 +6565,8 @@
             // Load and transform aligned structures
             for (const aligned of alignmentData.aligned) {
                 try {
-                    // Create transformed PDB content (this applies the transformation to overlay structures)
-                    const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
-                    
-                    const blob = new Blob([transformedPDB], { type: 'text/plain' });
+                    // Load structure WITHOUT transformation first (we'll apply it using Molstar's API)
+                    const blob = new Blob([aligned.file.data], { type: 'text/plain' });
                     const url = URL.createObjectURL(blob);
                     const data = await plugin.builders.data.download({ url: url, isBinary: false });
                     const trajectory = await plugin.builders.structure.parseTrajectory(data, aligned.file.format);
@@ -6570,9 +6576,40 @@
                     // Wait a moment for structure to be fully added to hierarchy
                     await new Promise(resolve => setTimeout(resolve, 100));
                     
-                    // Get structure index for query (after it's been added)
+                    // Get structure index before we remove it
                     const queryStructures = plugin.managers.structure.hierarchy.current.structures;
                     const queryStructureIndex = queryStructures.length > 0 ? queryStructures.length - 1 : 0;
+                    const queryStructure = queryStructures[queryStructureIndex];
+                    
+                    // Apply transformation by creating transformed PDB/CIF content
+                    // This is more reliable than trying to modify Molstar's internal structures
+                    const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
+                    
+                    // Remove the untransformed structure and load the transformed one
+                    if (queryStructure) {
+                        await plugin.managers.structure.hierarchy.remove([queryStructure]);
+                        // Wait a moment for removal to complete
+                        await new Promise(resolve => setTimeout(resolve, 50));
+                    }
+                    
+                    // Load the transformed structure
+                    const transformedBlob = new Blob([transformedPDB], { type: 'text/plain' });
+                    const transformedUrl = URL.createObjectURL(transformedBlob);
+                    const transformedData = await plugin.builders.data.download({ url: transformedUrl, isBinary: false });
+                    const transformedTrajectory = await plugin.builders.structure.parseTrajectory(transformedData, aligned.file.format);
+                    const transformedStructure = await plugin.builders.structure.hierarchy.applyPreset(transformedTrajectory, 'default');
+                    URL.revokeObjectURL(transformedUrl);
+                    
+                    // Update structure reference to point to the transformed structure
+                    // Get the new index after loading transformed structure
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    const updatedStructures = plugin.managers.structure.hierarchy.current.structures;
+                    const newQueryStructureIndex = updatedStructures.length > 0 ? updatedStructures.length - 1 : queryStructureIndex;
+                    
+                    console.log(`Loaded transformed structure ${aligned.file.name} at index ${newQueryStructureIndex}`);
+                    
+                    // Update the structure variable for later use
+                    const finalStructure = transformedStructure;
                     
                     // Build conservation map for query structure
                     const queryConservationMap = new Map();
@@ -6601,12 +6638,14 @@
                     
                     // Store conservation map by structure name instead of index
                     structureConservationMaps.set(aligned.file.name, queryConservationMap);
-                    console.log(`Stored query conservation map for ${aligned.file.name} (structure index: ${queryStructureIndex})`);
+                    // Store index to name mapping for reliable lookup (use the new index after transformation)
+                    structureIndexToName.set(newQueryStructureIndex, aligned.file.name);
+                    console.log(`Stored query conservation map for ${aligned.file.name} (structure index: ${newQueryStructureIndex})`);
                     
                     alignedStructures.push({
                         name: aligned.file.name,
-                        structure: structure,
-                        structureIndex: queryStructureIndex,
+                        structure: finalStructure,
+                        structureIndex: newQueryStructureIndex,
                         isReference: false,
                         visible: true,
                         conservation: aligned.conservation,
@@ -6679,39 +6718,114 @@
                         let structureName = null;
                         const currentStructures = plugin.managers.structure.hierarchy.current.structures;
                         
-                        // First, try to find by structure object reference
+                        // Strategy 1: Direct structure object matching with index-to-name map
                         for (let i = 0; i < currentStructures.length; i++) {
                             if (currentStructures[i] === structure) {
-                                // Find the corresponding structure name from alignedStructures
+                                structureName = structureIndexToName.get(i);
+                                if (structureName) {
+                                    console.log(`Matched structure by direct reference at index ${i}: ${structureName}`);
+                                    break;
+                                }
+                                // Fallback: try alignedStructures
                                 const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
                                 if (alignedStruct) {
                                     structureName = alignedStruct.name;
+                                    console.log(`Matched structure via alignedStructures at index ${i}: ${structureName}`);
                                     break;
                                 }
                             }
                         }
                         
-                        // If still not found, try matching by structure cell
+                        // Strategy 2: Match by structure cell (if available)
                         if (!structureName && structure.cell) {
                             for (let i = 0; i < currentStructures.length; i++) {
                                 if (currentStructures[i].cell === structure.cell) {
-                                    const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
-                                    if (alignedStruct) {
-                                        structureName = alignedStruct.name;
+                                    structureName = structureIndexToName.get(i);
+                                    if (!structureName) {
+                                        const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
+                                        if (alignedStruct) {
+                                            structureName = alignedStruct.name;
+                                        }
+                                    }
+                                    if (structureName) {
+                                        console.log(`Matched structure by cell at index ${i}: ${structureName}`);
                                         break;
                                     }
                                 }
                             }
                         }
                         
-                        // If still not found, try to match by checking all aligned structures
+                        // Strategy 3: Match by checking if structure is a component/model of any structure
+                        if (!structureName) {
+                            for (let i = 0; i < currentStructures.length; i++) {
+                                const currentStruct = currentStructures[i];
+                                
+                                // Check if structure matches any model in currentStruct
+                                if (currentStruct.models) {
+                                    for (const model of currentStruct.models) {
+                                        if (model === structure || model.structure === structure) {
+                                            structureName = structureIndexToName.get(i);
+                                            if (!structureName) {
+                                                const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
+                                                if (alignedStruct) {
+                                                    structureName = alignedStruct.name;
+                                                }
+                                            }
+                                            if (structureName) {
+                                                console.log(`Matched structure by model at index ${i}: ${structureName}`);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Check if structure matches any component in currentStruct
+                                if (!structureName && currentStruct.components) {
+                                    for (const component of currentStruct.components) {
+                                        if (component === structure || component.structure === structure) {
+                                            structureName = structureIndexToName.get(i);
+                                            if (!structureName) {
+                                                const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
+                                                if (alignedStruct) {
+                                                    structureName = alignedStruct.name;
+                                                }
+                                            }
+                                            if (structureName) {
+                                                console.log(`Matched structure by component at index ${i}: ${structureName}`);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                if (structureName) break;
+                            }
+                        }
+                        
+                        // Strategy 4: Match by checking all aligned structures (direct reference)
                         if (!structureName) {
                             for (const alignedStruct of alignedStructures) {
                                 if (alignedStruct.structure === structure) {
                                     structureName = alignedStruct.name;
+                                    console.log(`Matched structure by alignedStructures direct reference: ${structureName}`);
                                     break;
                                 }
                             }
+                        }
+                        
+                        // Strategy 5: Use structure index from context if available
+                        // The context might have structure index information
+                        if (!structureName && ctx.structure && ctx.structureIndex !== undefined) {
+                            structureName = structureIndexToName.get(ctx.structureIndex);
+                            if (structureName) {
+                                console.log(`Matched structure by context index ${ctx.structureIndex}: ${structureName}`);
+                            }
+                        }
+                        
+                        // Debug logging
+                        if (!structureName) {
+                            console.warn(`Could not find structure name for structure object. Available indices: ${Array.from(structureIndexToName.keys()).join(', ')}, Available names: ${Array.from(structureIndexToName.values()).join(', ')}`);
+                            console.warn(`Current structures count: ${currentStructures.length}, Aligned structures count: ${alignedStructures.length}`);
                         }
                         
                         // Get conservation map for this structure by name

@@ -6607,6 +6607,7 @@
                     const newQueryStructureIndex = updatedStructures.length > 0 ? updatedStructures.length - 1 : queryStructureIndex;
                     
                     console.log(`Loaded transformed structure ${aligned.file.name} at index ${newQueryStructureIndex}`);
+                    console.log(`Transformation applied: rotation matrix and translation (${aligned.transformation.translation.x.toFixed(2)}, ${aligned.transformation.translation.y.toFixed(2)}, ${aligned.transformation.translation.z.toFixed(2)})`);
                     
                     // Update the structure variable for later use
                     const finalStructure = transformedStructure;
@@ -6716,109 +6717,102 @@
                         
                         // Find structure name by matching structure object
                         let structureName = null;
+                        let matchedIndex = -1;
                         const currentStructures = plugin.managers.structure.hierarchy.current.structures;
                         
-                        // Strategy 1: Direct structure object matching with index-to-name map
+                        // First, try to find the structure index by iterating through all structures
+                        // and checking if any of their models/components match
                         for (let i = 0; i < currentStructures.length; i++) {
-                            if (currentStructures[i] === structure) {
-                                structureName = structureIndexToName.get(i);
-                                if (structureName) {
-                                    console.log(`Matched structure by direct reference at index ${i}: ${structureName}`);
-                                    break;
+                            const currentStruct = currentStructures[i];
+                            
+                            // Direct match
+                            if (currentStruct === structure) {
+                                matchedIndex = i;
+                                break;
+                            }
+                            
+                            // Check models
+                            if (currentStruct.models) {
+                                for (const model of currentStruct.models) {
+                                    if (model === structure || (model.structure && model.structure === structure)) {
+                                        matchedIndex = i;
+                                        break;
+                                    }
                                 }
-                                // Fallback: try alignedStructures
-                                const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
-                                if (alignedStruct) {
-                                    structureName = alignedStruct.name;
-                                    console.log(`Matched structure via alignedStructures at index ${i}: ${structureName}`);
-                                    break;
+                                if (matchedIndex >= 0) break;
+                            }
+                            
+                            // Check components
+                            if (currentStruct.components) {
+                                for (const component of currentStruct.components) {
+                                    if (component === structure || (component.structure && component.structure === structure)) {
+                                        matchedIndex = i;
+                                        break;
+                                    }
                                 }
+                                if (matchedIndex >= 0) break;
                             }
                         }
                         
-                        // Strategy 2: Match by structure cell (if available)
-                        if (!structureName && structure.cell) {
-                            for (let i = 0; i < currentStructures.length; i++) {
-                                if (currentStructures[i].cell === structure.cell) {
-                                    structureName = structureIndexToName.get(i);
-                                    if (!structureName) {
-                                        const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
-                                        if (alignedStruct) {
-                                            structureName = alignedStruct.name;
+                        // If we found a match, get the structure name
+                        if (matchedIndex >= 0) {
+                            structureName = structureIndexToName.get(matchedIndex);
+                            if (!structureName) {
+                                const alignedStruct = alignedStructures.find(s => s.structureIndex === matchedIndex);
+                                if (alignedStruct) {
+                                    structureName = alignedStruct.name;
+                                }
+                            }
+                            if (structureName) {
+                                console.log(`Matched structure at index ${matchedIndex}: ${structureName}`);
+                            }
+                        }
+                        
+                        // Fallback strategies if initial match failed
+                        if (!structureName) {
+                            // Try matching by structure cell
+                            if (structure.cell) {
+                                for (let i = 0; i < currentStructures.length; i++) {
+                                    if (currentStructures[i].cell === structure.cell) {
+                                        structureName = structureIndexToName.get(i);
+                                        if (!structureName) {
+                                            const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
+                                            if (alignedStruct) {
+                                                structureName = alignedStruct.name;
+                                            }
+                                        }
+                                        if (structureName) {
+                                            console.log(`Matched structure by cell at index ${i}: ${structureName}`);
+                                            break;
                                         }
                                     }
-                                    if (structureName) {
-                                        console.log(`Matched structure by cell at index ${i}: ${structureName}`);
+                                }
+                            }
+                            
+                            // Try matching by aligned structures direct reference
+                            if (!structureName) {
+                                for (const alignedStruct of alignedStructures) {
+                                    if (alignedStruct.structure === structure) {
+                                        structureName = alignedStruct.name;
+                                        console.log(`Matched structure by alignedStructures direct reference: ${structureName}`);
                                         break;
                                     }
                                 }
                             }
-                        }
-                        
-                        // Strategy 3: Match by checking if structure is a component/model of any structure
-                        if (!structureName) {
-                            for (let i = 0; i < currentStructures.length; i++) {
-                                const currentStruct = currentStructures[i];
-                                
-                                // Check if structure matches any model in currentStruct
-                                if (currentStruct.models) {
-                                    for (const model of currentStruct.models) {
-                                        if (model === structure || model.structure === structure) {
-                                            structureName = structureIndexToName.get(i);
-                                            if (!structureName) {
-                                                const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
-                                                if (alignedStruct) {
-                                                    structureName = alignedStruct.name;
-                                                }
-                                            }
-                                            if (structureName) {
-                                                console.log(`Matched structure by model at index ${i}: ${structureName}`);
-                                                break;
-                                            }
-                                        }
+                            
+                            // Last resort: if we have exactly 2 structures and we know the indices, 
+                            // use the structure index from the hierarchy position
+                            if (!structureName && currentStructures.length === 2 && structureIndexToName.size === 2) {
+                                // Try to match by position in hierarchy
+                                for (let i = 0; i < currentStructures.length; i++) {
+                                    // If this structure is at index i and we have a name for it, use it
+                                    if (structureIndexToName.has(i)) {
+                                        // Check if this could be the structure by checking if it's the only one left
+                                        structureName = structureIndexToName.get(i);
+                                        console.log(`Matched structure by hierarchy position at index ${i}: ${structureName}`);
+                                        break;
                                     }
                                 }
-                                
-                                // Check if structure matches any component in currentStruct
-                                if (!structureName && currentStruct.components) {
-                                    for (const component of currentStruct.components) {
-                                        if (component === structure || component.structure === structure) {
-                                            structureName = structureIndexToName.get(i);
-                                            if (!structureName) {
-                                                const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
-                                                if (alignedStruct) {
-                                                    structureName = alignedStruct.name;
-                                                }
-                                            }
-                                            if (structureName) {
-                                                console.log(`Matched structure by component at index ${i}: ${structureName}`);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                if (structureName) break;
-                            }
-                        }
-                        
-                        // Strategy 4: Match by checking all aligned structures (direct reference)
-                        if (!structureName) {
-                            for (const alignedStruct of alignedStructures) {
-                                if (alignedStruct.structure === structure) {
-                                    structureName = alignedStruct.name;
-                                    console.log(`Matched structure by alignedStructures direct reference: ${structureName}`);
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        // Strategy 5: Use structure index from context if available
-                        // The context might have structure index information
-                        if (!structureName && ctx.structure && ctx.structureIndex !== undefined) {
-                            structureName = structureIndexToName.get(ctx.structureIndex);
-                            if (structureName) {
-                                console.log(`Matched structure by context index ${ctx.structureIndex}: ${structureName}`);
                             }
                         }
                         
@@ -6865,6 +6859,33 @@
                                     const unit = location.unit;
                                     const element = location.element;
                                     
+                                    // If we still don't have structureName, try to find it from the unit/model
+                                    let effectiveStructureName = structureName;
+                                    if (!effectiveStructureName && unit && unit.model) {
+                                        // Try to find which structure this unit belongs to
+                                        for (let i = 0; i < currentStructures.length; i++) {
+                                            const currentStruct = currentStructures[i];
+                                            if (currentStruct.models) {
+                                                for (const model of currentStruct.models) {
+                                                    if (model === unit.model || (model.units && model.units.includes(unit))) {
+                                                        effectiveStructureName = structureIndexToName.get(i);
+                                                        if (!effectiveStructureName) {
+                                                            const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
+                                                            if (alignedStruct) {
+                                                                effectiveStructureName = alignedStruct.name;
+                                                            }
+                                                        }
+                                                        if (effectiveStructureName) break;
+                                                    }
+                                                }
+                                            }
+                                            if (effectiveStructureName) break;
+                                        }
+                                    }
+                                    
+                                    // Get the conservation map using the effective structure name
+                                    const effectiveConservationMap = effectiveStructureName ? structureConservationMaps.get(effectiveStructureName) : conservationMap;
+                                    
                                     // Get residue index from element
                                     const residueIndex = unit.model.atomicHierarchy.residueAtomSegments.index[element];
                                     
@@ -6875,7 +6896,7 @@
                                     
                                     // Look up conservation status
                                     const key = `${chainId}_${seqId}`;
-                                    const isConserved = conservationMap.get(key);
+                                    const isConserved = effectiveConservationMap ? effectiveConservationMap.get(key) : null;
                                     
                                     // Color scheme: conserved = green, variable = orange
                                     if (isConserved === true) {

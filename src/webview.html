@@ -6479,6 +6479,31 @@
             
             const plugin = viewer.plugin;
             
+            // Build conservation map for reference structure
+            // Conservation is based on the first aligned structure's conservation data
+            const firstAligned = alignmentData.aligned[0];
+            const refConservationMap = new Map(); // Map from aligned position to conservation status
+            
+            if (firstAligned && firstAligned.conservation) {
+                // Map aligned positions to conservation status
+                // We need to map from sequence alignment positions to actual residue numbers
+                const alignedRef = firstAligned.sequenceAlignment.aligned1;
+                let refSeqIdx = 0;
+                
+                for (let i = 0; i < alignedRef.length; i++) {
+                    if (alignedRef[i] !== '-') {
+                        // This position in the alignment corresponds to a residue
+                        const refResidue = alignmentData.reference.sequence[refSeqIdx];
+                        if (refResidue) {
+                            const key = `${refResidue.chain || 'A'}_${refResidue.number}`;
+                            const isConserved = firstAligned.conservation[i] && firstAligned.conservation[i].conserved;
+                            refConservationMap.set(key, isConserved);
+                        }
+                        refSeqIdx++;
+                    }
+                }
+            }
+            
             // Load reference structure
             const refBlob = new Blob([alignmentData.reference.file.data], { type: 'text/plain' });
             const refUrl = URL.createObjectURL(refBlob);
@@ -6491,14 +6516,15 @@
                 name: alignmentData.reference.file.name,
                 structure: refStructure,
                 isReference: true,
-                visible: true
+                visible: true,
+                conservationMap: refConservationMap
             });
             structureVisibility.set(alignmentData.reference.file.name, true);
             
             // Load and transform aligned structures
             for (const aligned of alignmentData.aligned) {
                 try {
-                    // Create transformed PDB content
+                    // Create transformed PDB content (this applies the transformation to overlay structures)
                     const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
                     
                     const blob = new Blob([transformedPDB], { type: 'text/plain' });
@@ -6508,12 +6534,32 @@
                     const structure = await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
                     URL.revokeObjectURL(url);
                     
+                    // Build conservation map for query structure
+                    const queryConservationMap = new Map();
+                    if (aligned.conservation && aligned.trimmedSequence) {
+                        const alignedQuery = aligned.sequenceAlignment.aligned2;
+                        let querySeqIdx = 0;
+                        
+                        for (let i = 0; i < alignedQuery.length; i++) {
+                            if (alignedQuery[i] !== '-') {
+                                const queryResidue = aligned.trimmedSequence[querySeqIdx];
+                                if (queryResidue) {
+                                    const key = `${queryResidue.chain || 'A'}_${queryResidue.number}`;
+                                    const isConserved = aligned.conservation[i] && aligned.conservation[i].conserved;
+                                    queryConservationMap.set(key, isConserved);
+                                }
+                                querySeqIdx++;
+                            }
+                        }
+                    }
+                    
                     alignedStructures.push({
                         name: aligned.file.name,
                         structure: structure,
                         isReference: false,
                         visible: true,
-                        conservation: aligned.conservation
+                        conservation: aligned.conservation,
+                        conservationMap: queryConservationMap
                     });
                     structureVisibility.set(aligned.file.name, true);
                 } catch (error) {
@@ -6521,8 +6567,135 @@
                 }
             }
             
+            // Apply conservation-based coloring to all structures
+            await applyConservationColoring();
+            
+            // Reset camera to show both structures properly overlaid
+            plugin.managers.camera.reset();
+            
             // Update structure toggle controls
             updateStructureToggleControls();
+        }
+        
+        // Apply conservation-based coloring to aligned structures
+        async function applyConservationColoring() {
+            if (!viewer || !alignmentData) return;
+            
+            try {
+                const plugin = viewer.plugin;
+                const structures = plugin.managers.structure.hierarchy.current.structures;
+                
+                if (!structures || structures.length === 0) {
+                    console.warn('No structures found for conservation coloring');
+                    return;
+                }
+                
+                console.log('Applying conservation-based coloring');
+                
+                // Create unique theme name
+                const themeName = `conservation-alignment-${Math.random().toString(36).substring(7)}`;
+                
+                // Conservation color theme provider
+                const ConservationColorThemeProvider = {
+                    name: themeName,
+                    label: 'Conservation (Aligned)',
+                    category: "Custom",
+                    factory: (ctx, props) => {
+                        const structure = ctx.structure;
+                        if (!structure || !structure.models || structure.models.length === 0) {
+                            return {
+                                factory: ConservationColorThemeProvider.factory,
+                                granularity: 'group',
+                                color: () => 0x808080,
+                                props: props
+                            };
+                        }
+                        
+                        // Find the conservation map for this structure
+                        let conservationMap = null;
+                        const structureName = structure.cell?.transform?.ref || '';
+                        
+                        for (const alignedStruct of alignedStructures) {
+                            if (alignedStruct.name === structureName || 
+                                structureName.includes(alignedStruct.name)) {
+                                conservationMap = alignedStruct.conservationMap;
+                                break;
+                            }
+                        }
+                        
+                        // If no conservation map found, use gray
+                        if (!conservationMap || conservationMap.size === 0) {
+                            console.warn(`No conservation map found for structure: ${structureName}`);
+                            return {
+                                factory: ConservationColorThemeProvider.factory,
+                                granularity: 'group',
+                                color: () => 0x808080,
+                                props: props
+                            };
+                        }
+                        
+                        return {
+                            factory: ConservationColorThemeProvider.factory,
+                            granularity: 'group',
+                            color: (location) => {
+                                try {
+                                    const unit = location.unit;
+                                    const element = location.element;
+                                    
+                                    // Get residue index from element
+                                    const residueIndex = unit.model.atomicHierarchy.residueAtomSegments.index[element];
+                                    
+                                    // Get residue information
+                                    const seqId = unit.model.atomicHierarchy.residues.label_seq_id.value(residueIndex);
+                                    const chainId = unit.model.atomicHierarchy.chains.label_asym_id.value(
+                                        unit.model.atomicHierarchy.residues.chainKey.value(residueIndex)
+                                    ) || 'A';
+                                    
+                                    // Look up conservation status
+                                    const key = `${chainId}_${seqId}`;
+                                    const isConserved = conservationMap.get(key);
+                                    
+                                    // Color scheme: conserved = green/blue, variable = red/orange
+                                    if (isConserved === true) {
+                                        return 0x00FF00; // Green for conserved
+                                    } else if (isConserved === false) {
+                                        return 0xFF6600; // Orange for variable
+                                    } else {
+                                        return 0x808080; // Gray for unknown/unaligned
+                                    }
+                                } catch (error) {
+                                    console.warn('Error getting conservation color:', error);
+                                    return 0x808080; // Gray fallback
+                                }
+                            },
+                            props: props,
+                            description: 'Conservation-based coloring: Green = conserved, Orange = variable'
+                        };
+                    },
+                    getParams: () => ({}),
+                    defaultValues: {},
+                    isApplicable: (ctx) => !!ctx.structure
+                };
+                
+                // Register the color theme
+                plugin.representation.structure.themes.colorThemeRegistry.add(ConservationColorThemeProvider);
+                console.log(`Registered conservation theme: ${themeName}`);
+                
+                // Apply the theme to all aligned structures
+                for (const structure of structures) {
+                    if (structure.components && structure.components.length > 0) {
+                        await plugin.managers.structure.component.updateRepresentationsTheme(
+                            structure.components,
+                            { color: themeName }
+                        );
+                    }
+                }
+                
+                console.log('Successfully applied conservation-based coloring');
+                
+            } catch (error) {
+                console.error('Error applying conservation coloring:', error);
+            }
         }
         
         // Create transformed PDB content

@@ -2160,6 +2160,7 @@
                 }
                 
                 updateFileHistory();
+                updateReferenceStructureDropdown(); // Update alignment dropdown
                 document.getElementById('animation-controls').style.display = 'none';
                 stopAnimation();
                 
@@ -6469,8 +6470,8 @@
             return conservation;
         }
         
-        // Global map to store conservation maps by structure index
-        // Key: structure index in Molstar, Value: conservation map
+        // Global map to store conservation maps by structure name
+        // Key: structure file name, Value: conservation map
         const structureConservationMaps = new Map();
         
         // Visualize aligned structures in Molstar
@@ -6532,11 +6533,16 @@
             const refStructure = await plugin.builders.structure.hierarchy.applyPreset(refTrajectory, 'default');
             URL.revokeObjectURL(refUrl);
             
-            // Get structure index for reference
+            // Wait a moment for structure to be fully added to hierarchy
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Get structure index for reference (after it's been added)
             const refStructures = plugin.managers.structure.hierarchy.current.structures;
             const refStructureIndex = refStructures.length > 0 ? refStructures.length - 1 : 0;
-            structureConservationMaps.set(refStructureIndex, refConservationMap);
-            console.log(`Stored reference conservation map at index ${refStructureIndex} for ${alignmentData.reference.file.name}`);
+            
+            // Store conservation map by structure name instead of index
+            structureConservationMaps.set(alignmentData.reference.file.name, refConservationMap);
+            console.log(`Stored reference conservation map for ${alignmentData.reference.file.name} (structure index: ${refStructureIndex})`);
             
             alignedStructures.push({
                 name: alignmentData.reference.file.name,
@@ -6561,7 +6567,10 @@
                     const structure = await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
                     URL.revokeObjectURL(url);
                     
-                    // Get structure index for query
+                    // Wait a moment for structure to be fully added to hierarchy
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    
+                    // Get structure index for query (after it's been added)
                     const queryStructures = plugin.managers.structure.hierarchy.current.structures;
                     const queryStructureIndex = queryStructures.length > 0 ? queryStructures.length - 1 : 0;
                     
@@ -6590,8 +6599,9 @@
                         console.log(`Sample query conservation keys: ${sampleKeys.join(', ')}`);
                     }
                     
-                    structureConservationMaps.set(queryStructureIndex, queryConservationMap);
-                    console.log(`Stored query conservation map at index ${queryStructureIndex} for ${aligned.file.name}`);
+                    // Store conservation map by structure name instead of index
+                    structureConservationMaps.set(aligned.file.name, queryConservationMap);
+                    console.log(`Stored query conservation map for ${aligned.file.name} (structure index: ${queryStructureIndex})`);
                     
                     alignedStructures.push({
                         name: aligned.file.name,
@@ -6613,10 +6623,15 @@
             console.log(`Total structures loaded: ${allStructures.length}`);
             console.log(`Conservation maps stored: ${structureConservationMaps.size}`);
             
+            // Wait a bit longer to ensure all structures are fully processed
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
             // Apply conservation-based coloring to all structures
             await applyConservationColoring();
             
             // Reset camera to show both structures properly overlaid
+            // Use a slight delay to ensure structures are rendered before resetting camera
+            await new Promise(resolve => setTimeout(resolve, 100));
             plugin.managers.camera.reset();
             
             // Update structure toggle controls
@@ -6660,35 +6675,55 @@
                             };
                         }
                         
-                        // Find structure index by matching structure object
-                        let structureIndex = -1;
+                        // Find structure name by matching structure object
+                        let structureName = null;
                         const currentStructures = plugin.managers.structure.hierarchy.current.structures;
                         
+                        // First, try to find by structure object reference
                         for (let i = 0; i < currentStructures.length; i++) {
                             if (currentStructures[i] === structure) {
-                                structureIndex = i;
-                                break;
-                            }
-                        }
-                        
-                        // If still not found, try matching by structure cell
-                        if (structureIndex === -1 && structure.cell) {
-                            for (let i = 0; i < currentStructures.length; i++) {
-                                if (currentStructures[i].cell === structure.cell) {
-                                    structureIndex = i;
+                                // Find the corresponding structure name from alignedStructures
+                                const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
+                                if (alignedStruct) {
+                                    structureName = alignedStruct.name;
                                     break;
                                 }
                             }
                         }
                         
-                        // Get conservation map for this structure index
-                        const conservationMap = structureIndex >= 0 ? structureConservationMaps.get(structureIndex) : null;
+                        // If still not found, try matching by structure cell
+                        if (!structureName && structure.cell) {
+                            for (let i = 0; i < currentStructures.length; i++) {
+                                if (currentStructures[i].cell === structure.cell) {
+                                    const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
+                                    if (alignedStruct) {
+                                        structureName = alignedStruct.name;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // If still not found, try to match by checking all aligned structures
+                        if (!structureName) {
+                            for (const alignedStruct of alignedStructures) {
+                                if (alignedStruct.structure === structure) {
+                                    structureName = alignedStruct.name;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Get conservation map for this structure by name
+                        const conservationMap = structureName ? structureConservationMaps.get(structureName) : null;
                         
                         if (!conservationMap || conservationMap.size === 0) {
-                            console.warn(`No conservation map found for structure index ${structureIndex}`);
+                            console.warn(`No conservation map found for structure ${structureName || 'unknown'}`);
                             // Fallback: use different colors for reference vs query so we can see both structures
-                            if (structureIndex === 0) {
-                                console.log(`Using fallback blue color for structure index ${structureIndex} (reference)`);
+                            // Try to determine if it's reference by checking alignedStructures
+                            const isReference = alignedStructures.find(s => s.structure === structure)?.isReference || false;
+                            if (isReference) {
+                                console.log(`Using fallback blue color for structure ${structureName || 'unknown'} (reference)`);
                                 return {
                                     factory: ConservationColorThemeProvider.factory,
                                     granularity: 'group',
@@ -6696,7 +6731,7 @@
                                     props: props
                                 };
                             } else {
-                                console.log(`Using fallback red color for structure index ${structureIndex} (query)`);
+                                console.log(`Using fallback red color for structure ${structureName || 'unknown'} (query)`);
                                 return {
                                     factory: ConservationColorThemeProvider.factory,
                                     granularity: 'group',
@@ -6706,7 +6741,7 @@
                             }
                         }
                         
-                        console.log(`Using conservation map for structure index ${structureIndex} (${conservationMap.size} entries)`);
+                        console.log(`Using conservation map for structure ${structureName} (${conservationMap.size} entries)`);
                         
                         return {
                             factory: ConservationColorThemeProvider.factory,
@@ -6759,15 +6794,18 @@
                 // Apply the theme to all aligned structures
                 for (let i = 0; i < structures.length; i++) {
                     const structure = structures[i];
-                    const hasMap = structureConservationMaps.has(i);
-                    console.log(`Structure ${i}: has conservation map = ${hasMap}`);
+                    // Find structure name to check if we have a conservation map
+                    const alignedStruct = alignedStructures.find(s => s.structureIndex === i || s.structure === structure);
+                    const structureName = alignedStruct ? alignedStruct.name : null;
+                    const hasMap = structureName ? structureConservationMaps.has(structureName) : false;
+                    console.log(`Structure ${i} (${structureName || 'unknown'}): has conservation map = ${hasMap}`);
                     
                     if (structure.components && structure.components.length > 0) {
                         await plugin.managers.structure.component.updateRepresentationsTheme(
                             structure.components,
                             { color: themeName }
                         );
-                        console.log(`Applied conservation theme to structure ${i}`);
+                        console.log(`Applied conservation theme to structure ${i} (${structureName || 'unknown'})`);
                     }
                 }
                 

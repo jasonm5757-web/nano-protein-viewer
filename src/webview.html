@@ -6562,10 +6562,11 @@
             });
             structureVisibility.set(alignmentData.reference.file.name, true);
             
-            // Load and transform aligned structures
+            // Load all query structures first (without transformation)
+            // We'll use Molstar's superposition API to align them
             for (const aligned of alignmentData.aligned) {
                 try {
-                    // Load structure WITHOUT transformation first (we'll apply it using Molstar's API)
+                    // Load structure WITHOUT transformation - we'll use Molstar's superposition
                     const blob = new Blob([aligned.file.data], { type: 'text/plain' });
                     const url = URL.createObjectURL(blob);
                     const data = await plugin.builders.data.download({ url: url, isBinary: false });
@@ -6576,41 +6577,17 @@
                     // Wait a moment for structure to be fully added to hierarchy
                     await new Promise(resolve => setTimeout(resolve, 100));
                     
-                    // Get structure index before we remove it
+                    // Get structure index after loading
                     const queryStructures = plugin.managers.structure.hierarchy.current.structures;
                     const queryStructureIndex = queryStructures.length > 0 ? queryStructures.length - 1 : 0;
-                    const queryStructure = queryStructures[queryStructureIndex];
                     
-                    // Apply transformation by creating transformed PDB/CIF content
-                    // This is more reliable than trying to modify Molstar's internal structures
-                    const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
+                    console.log(`Loaded structure ${aligned.file.name} at index ${queryStructureIndex} (will be superposed)`);
                     
-                    // Remove the untransformed structure and load the transformed one
-                    if (queryStructure) {
-                        await plugin.managers.structure.hierarchy.remove([queryStructure]);
-                        // Wait a moment for removal to complete
-                        await new Promise(resolve => setTimeout(resolve, 50));
-                    }
+                    // Store the structure for later superposition
+                    const finalStructure = structure;
                     
-                    // Load the transformed structure
-                    const transformedBlob = new Blob([transformedPDB], { type: 'text/plain' });
-                    const transformedUrl = URL.createObjectURL(transformedBlob);
-                    const transformedData = await plugin.builders.data.download({ url: transformedUrl, isBinary: false });
-                    const transformedTrajectory = await plugin.builders.structure.parseTrajectory(transformedData, aligned.file.format);
-                    const transformedStructure = await plugin.builders.structure.hierarchy.applyPreset(transformedTrajectory, 'default');
-                    URL.revokeObjectURL(transformedUrl);
-                    
-                    // Update structure reference to point to the transformed structure
-                    // Get the new index after loading transformed structure
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                    const updatedStructures = plugin.managers.structure.hierarchy.current.structures;
-                    const newQueryStructureIndex = updatedStructures.length > 0 ? updatedStructures.length - 1 : queryStructureIndex;
-                    
-                    console.log(`Loaded transformed structure ${aligned.file.name} at index ${newQueryStructureIndex}`);
-                    console.log(`Transformation applied: rotation matrix and translation (${aligned.transformation.translation.x.toFixed(2)}, ${aligned.transformation.translation.y.toFixed(2)}, ${aligned.transformation.translation.z.toFixed(2)})`);
-                    
-                    // Update the structure variable for later use
-                    const finalStructure = transformedStructure;
+                    // Store index to name mapping
+                    structureIndexToName.set(queryStructureIndex, aligned.file.name);
                     
                     // Build conservation map for query structure
                     const queryConservationMap = new Map();
@@ -6639,14 +6616,12 @@
                     
                     // Store conservation map by structure name instead of index
                     structureConservationMaps.set(aligned.file.name, queryConservationMap);
-                    // Store index to name mapping for reliable lookup (use the new index after transformation)
-                    structureIndexToName.set(newQueryStructureIndex, aligned.file.name);
-                    console.log(`Stored query conservation map for ${aligned.file.name} (structure index: ${newQueryStructureIndex})`);
+                    console.log(`Stored query conservation map for ${aligned.file.name} (structure index: ${queryStructureIndex})`);
                     
                     alignedStructures.push({
                         name: aligned.file.name,
                         structure: finalStructure,
-                        structureIndex: newQueryStructureIndex,
+                        structureIndex: queryStructureIndex,
                         isReference: false,
                         visible: true,
                         conservation: aligned.conservation,
@@ -6665,6 +6640,77 @@
             
             // Wait a bit longer to ensure all structures are fully processed
             await new Promise(resolve => setTimeout(resolve, 200));
+            
+            // Use Molstar's superposition or apply manual transformation
+            // Reference structure is at index 0, query structures start at index 1
+            if (allStructures.length >= 2) {
+                try {
+                    const refStructure = allStructures[0];
+                    const queryStructures = allStructures.slice(1);
+                    
+                    console.log(`Attempting to superpose ${queryStructures.length} query structure(s) onto reference...`);
+                    
+                    // Apply transformations using our calculated alignment
+                    // Since Molstar's superposition builder may not be directly accessible,
+                    // we'll apply the transformation by reloading with transformed coordinates
+                    for (let i = 0; i < queryStructures.length; i++) {
+                        const queryStructure = queryStructures[i];
+                        const aligned = alignmentData.aligned[i];
+                        
+                        if (aligned && aligned.transformation) {
+                            console.log(`Applying transformation to structure ${i + 1} (${aligned.file.name})...`);
+                            
+                            // Remove the untransformed structure
+                            await plugin.managers.structure.hierarchy.remove([queryStructure]);
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                            
+                            // Create transformed PDB/CIF content
+                            const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
+                            
+                            // Load the transformed structure
+                            const transformedBlob = new Blob([transformedPDB], { type: 'text/plain' });
+                            const transformedUrl = URL.createObjectURL(transformedBlob);
+                            const transformedData = await plugin.builders.data.download({ url: transformedUrl, isBinary: false });
+                            const transformedTrajectory = await plugin.builders.structure.parseTrajectory(transformedData, aligned.file.format);
+                            const transformedStructure = await plugin.builders.structure.hierarchy.applyPreset(transformedTrajectory, 'default');
+                            URL.revokeObjectURL(transformedUrl);
+                            
+                            // Wait for structure to be added
+                            await new Promise(resolve => setTimeout(resolve, 100));
+                            
+                            // Update the structure index mapping
+                            const updatedStructures = plugin.managers.structure.hierarchy.current.structures;
+                            // Find the index of the newly loaded transformed structure
+                            let newIndex = -1;
+                            for (let j = 0; j < updatedStructures.length; j++) {
+                                if (updatedStructures[j] === transformedStructure) {
+                                    newIndex = j;
+                                    break;
+                                }
+                            }
+                            // Fallback: use the last structure index
+                            if (newIndex === -1 && updatedStructures.length > 0) {
+                                newIndex = updatedStructures.length - 1;
+                            }
+                            
+                            if (newIndex >= 0) {
+                                structureIndexToName.set(newIndex, aligned.file.name);
+                            }
+                            
+                            // Update alignedStructures
+                            const alignedStruct = alignedStructures.find(s => s.name === aligned.file.name);
+                            if (alignedStruct) {
+                                alignedStruct.structure = transformedStructure;
+                                alignedStruct.structureIndex = newIndex;
+                            }
+                            
+                            console.log(`Applied transformation to ${aligned.file.name}, new index: ${newIndex}`);
+                        }
+                    }
+                } catch (superError) {
+                    console.error('Error during superposition:', superError);
+                }
+            }
             
             // Apply conservation-based coloring to all structures
             await applyConservationColoring();
@@ -6887,11 +6933,27 @@
                                     const effectiveConservationMap = effectiveStructureName ? structureConservationMaps.get(effectiveStructureName) : conservationMap;
                                     
                                     // Get residue index from element
+                                    if (!unit || !unit.model || !unit.model.atomicHierarchy) {
+                                        return 0x808080; // Gray fallback
+                                    }
+                                    
                                     const residueIndex = unit.model.atomicHierarchy.residueAtomSegments.index[element];
                                     
-                                    // Get residue information
+                                    // Get residue information - add safety checks
+                                    if (!unit.model.atomicHierarchy.residues || 
+                                        !unit.model.atomicHierarchy.residues.label_seq_id ||
+                                        !unit.model.atomicHierarchy.residues.chainKey) {
+                                        return 0x808080; // Gray fallback
+                                    }
+                                    
                                     const seqId = unit.model.atomicHierarchy.residues.label_seq_id.value(residueIndex);
                                     const chainKey = unit.model.atomicHierarchy.residues.chainKey.value(residueIndex);
+                                    
+                                    if (!unit.model.atomicHierarchy.chains || 
+                                        !unit.model.atomicHierarchy.chains.label_asym_id) {
+                                        return 0x808080; // Gray fallback
+                                    }
+                                    
                                     const chainId = unit.model.atomicHierarchy.chains.label_asym_id.value(chainKey) || 'A';
                                     
                                     // Look up conservation status

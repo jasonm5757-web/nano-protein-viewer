@@ -3201,6 +3201,226 @@
              });
         }
 
+        // Inspect Molstar API for superposition/transform capabilities
+        function inspectMolstarAPI(viewer) {
+            console.log('=== Molstar API Inspection ===');
+            
+            if (!viewer || !viewer.plugin) {
+                console.warn('Viewer or plugin not available');
+                return;
+            }
+            
+            const plugin = viewer.plugin;
+            
+            // 1. Check global molstar object
+            console.log('\n1. Global molstar object:');
+            console.log('  - Available:', typeof molstar !== 'undefined');
+            if (typeof molstar !== 'undefined') {
+                console.log('  - Keys:', Object.keys(molstar).slice(0, 20).join(', '), '...');
+                
+                // Check for superposition-related exports
+                const superpositionKeys = Object.keys(molstar).filter(k => 
+                    k.toLowerCase().includes('super') || 
+                    k.toLowerCase().includes('align') ||
+                    k.toLowerCase().includes('transform')
+                );
+                if (superpositionKeys.length > 0) {
+                    console.log('  - Superposition/Transform related:', superpositionKeys.join(', '));
+                }
+            }
+            
+            // 2. Check plugin.builders.structure
+            console.log('\n2. plugin.builders.structure:');
+            if (plugin.builders && plugin.builders.structure) {
+                const structureBuilders = Object.keys(plugin.builders.structure);
+                console.log('  - Available builders:', structureBuilders.join(', '));
+                
+                // Check for transform/superposition builders
+                const transformBuilders = structureBuilders.filter(k => 
+                    k.toLowerCase().includes('transform') || 
+                    k.toLowerCase().includes('super') ||
+                    k.toLowerCase().includes('align')
+                );
+                if (transformBuilders.length > 0) {
+                    console.log('  - Transform/Superposition builders:', transformBuilders.join(', '));
+                }
+                
+                // Check specific methods
+                ['transform', 'superposition', 'align', 'applyTransform'].forEach(method => {
+                    if (plugin.builders.structure[method]) {
+                        console.log(`  - ✓ ${method} is available`);
+                        console.log(`    Type:`, typeof plugin.builders.structure[method]);
+                    }
+                });
+            }
+            
+            // 3. Check plugin.managers.structure
+            console.log('\n3. plugin.managers.structure:');
+            if (plugin.managers && plugin.managers.structure) {
+                const structureManagers = Object.keys(plugin.managers.structure);
+                console.log('  - Available managers:', structureManagers.join(', '));
+                
+                // Check component manager
+                if (plugin.managers.structure.component) {
+                    const componentMethods = Object.keys(plugin.managers.structure.component);
+                    console.log('  - Component manager methods:', componentMethods.slice(0, 15).join(', '), '...');
+                    
+                    // Check for transform methods
+                    const transformMethods = componentMethods.filter(k => 
+                        k.toLowerCase().includes('transform') || 
+                        k.toLowerCase().includes('update')
+                    );
+                    if (transformMethods.length > 0) {
+                        console.log('  - Transform-related methods:', transformMethods.join(', '));
+                    }
+                    
+                    // Check specific methods
+                    ['updateTransform', 'setTransform', 'applyTransform', 'transform'].forEach(method => {
+                        if (plugin.managers.structure.component[method]) {
+                            console.log(`  - ✓ component.${method} is available`);
+                        }
+                    });
+                }
+                
+                // Check hierarchy manager
+                if (plugin.managers.structure.hierarchy) {
+                    const hierarchyMethods = Object.keys(plugin.managers.structure.hierarchy);
+                    console.log('  - Hierarchy manager methods:', hierarchyMethods.slice(0, 10).join(', '), '...');
+                }
+            }
+            
+            // 4. Check structure objects for transform properties
+            console.log('\n4. Structure object inspection:');
+            const structures = plugin.managers.structure.hierarchy.current.structures;
+            if (structures && structures.length > 0) {
+                const struct = structures[0];
+                console.log('  - Structure keys:', Object.keys(struct).slice(0, 15).join(', '), '...');
+                
+                // Check for transform property
+                if (struct.transform) {
+                    console.log('  - ✓ structure.transform exists');
+                }
+                if (struct.cell && struct.cell.transform) {
+                    console.log('  - ✓ structure.cell.transform exists');
+                    console.log('    Transform keys:', Object.keys(struct.cell.transform).join(', '));
+                }
+                
+                // Check components
+                if (struct.components) {
+                    console.log('  - Components:', struct.components.length);
+                    if (struct.components.length > 0) {
+                        const comp = struct.components[0];
+                        console.log('    Component keys:', Object.keys(comp).slice(0, 10).join(', '), '...');
+                        if (comp.transform) {
+                            console.log('    - ✓ component.transform exists');
+                        }
+                    }
+                }
+            }
+            
+            // 5. Check for superposition plugin
+            console.log('\n5. Plugin registry:');
+            if (plugin.managers && plugin.managers.plugins) {
+                const plugins = Object.keys(plugin.managers.plugins);
+                console.log('  - Registered plugins:', plugins.join(', '));
+                
+                const superPlugins = plugins.filter(p => 
+                    p.toLowerCase().includes('super') || 
+                    p.toLowerCase().includes('align')
+                );
+                if (superPlugins.length > 0) {
+                    console.log('  - Superposition plugins:', superPlugins.join(', '));
+                }
+            }
+            
+            // 6. Search for any transform-related methods in plugin
+            console.log('\n6. Deep search for transform methods:');
+            function searchObject(obj, path = '', depth = 0) {
+                if (depth > 3) return []; // Limit depth
+                const results = [];
+                
+                if (typeof obj !== 'object' || obj === null) return results;
+                
+                for (const key in obj) {
+                    if (key.toLowerCase().includes('transform') || 
+                        key.toLowerCase().includes('super') ||
+                        key.toLowerCase().includes('align')) {
+                        results.push(path + '.' + key);
+                    }
+                    if (typeof obj[key] === 'object' && obj[key] !== null) {
+                        results.push(...searchObject(obj[key], path + '.' + key, depth + 1));
+                    }
+                }
+                return results;
+            }
+            
+            const transformPaths = searchObject(plugin, 'plugin');
+            if (transformPaths.length > 0) {
+                console.log('  - Found transform-related paths:');
+                transformPaths.slice(0, 20).forEach(path => {
+                    console.log('    -', path);
+                });
+            } else {
+                console.log('  - No transform-related paths found in plugin object');
+            }
+            
+            console.log('\n=== End API Inspection ===\n');
+        }
+        
+        // Manual inspection function - can be called from browser console
+        // Usage: window.inspectMolstar() or just inspectMolstar()
+        window.inspectMolstar = function() {
+            if (!viewer) {
+                console.error('Viewer not initialized yet. Wait for viewer to load.');
+                return;
+            }
+            inspectMolstarAPI(viewer);
+        };
+        
+        // Quick check function for specific transform methods
+        window.checkMolstarTransform = function() {
+            if (!viewer || !viewer.plugin) {
+                console.error('Viewer or plugin not available');
+                return;
+            }
+            
+            const plugin = viewer.plugin;
+            const results = {
+                builders: {},
+                managers: {},
+                structures: {}
+            };
+            
+            // Check builders
+            if (plugin.builders && plugin.builders.structure) {
+                ['transform', 'superposition', 'align', 'applyTransform'].forEach(method => {
+                    results.builders[method] = typeof plugin.builders.structure[method] !== 'undefined';
+                });
+            }
+            
+            // Check component manager
+            if (plugin.managers && plugin.managers.structure && plugin.managers.structure.component) {
+                ['updateTransform', 'setTransform', 'applyTransform', 'transform'].forEach(method => {
+                    results.managers[method] = typeof plugin.managers.structure.component[method] !== 'undefined';
+                });
+            }
+            
+            // Check structure objects
+            const structures = plugin.managers.structure.hierarchy.current.structures;
+            if (structures && structures.length > 0) {
+                const struct = structures[0];
+                results.structures.hasTransform = struct.transform !== undefined;
+                results.structures.hasCellTransform = struct.cell && struct.cell.transform !== undefined;
+                results.structures.hasComponents = struct.components && struct.components.length > 0;
+                if (results.structures.hasComponents) {
+                    results.structures.componentHasTransform = struct.components[0].transform !== undefined;
+                }
+            }
+            
+            console.table(results);
+            return results;
+        };
+        
         // Init function
         async function init() {
             // Wait for DOM to be ready
@@ -3247,6 +3467,9 @@
                 });
                 
                 console.log('Molstar viewer initialized successfully');
+                
+                // Inspect Molstar API for superposition/transform capabilities
+                inspectMolstarAPI(viewer);
                 
                 // Notify VSCode that webview is ready
                 vscode.postMessage({

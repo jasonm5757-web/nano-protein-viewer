@@ -6677,80 +6677,65 @@
                                 translation.x, translation.y, translation.z, 1
                             ]);
                             
-                            // Try to use Molstar's superposition builder if available
-                            // Otherwise, use file-based transformation (more reliable)
-                            let useFileTransformation = true;
+                            // Apply transformation using file-based approach (remove and reload with transformed coordinates)
+                            // This is necessary because Molstar normalizes coordinates on load, so we need to transform before loading
+                            console.log(`Applying file-based transformation for ${aligned.file.name}...`);
                             
-                            // Check if Molstar has superposition builder
-                            if (plugin.builders && plugin.builders.structure && plugin.builders.structure.superposition) {
-                                try {
-                                    console.log(`Attempting to use Molstar superposition builder...`);
-                                    // Try to use superposition builder with our aligned atoms
-                                    // This would require creating selections, which is complex
-                                    // For now, fall back to file transformation
-                                    useFileTransformation = true;
-                                } catch (superError) {
-                                    console.warn(`Molstar superposition builder not available:`, superError);
-                                    useFileTransformation = true;
-                                }
+                            // Verify transformation has non-zero translation
+                            const trans = aligned.transformation.translation;
+                            if (Math.abs(trans.x) < 0.001 && Math.abs(trans.y) < 0.001 && Math.abs(trans.z) < 0.001) {
+                                console.warn(`WARNING: Transformation translation is near zero for ${aligned.file.name}.`);
                             }
                             
-                            if (useFileTransformation) {
-                                // Use file-based transformation (remove and reload with transformed coordinates)
-                                console.log(`Using file-based transformation for ${aligned.file.name}...`);
+                            // Remove the untransformed structure
+                            await plugin.managers.structure.hierarchy.remove([queryStructure]);
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                            
+                            // Create transformed PDB/CIF content
+                            const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
+                            
+                            // Verify transformation was applied
+                            console.log(`Created transformed PDB/CIF for ${aligned.file.name}, original length: ${aligned.file.data.length}, transformed length: ${transformedPDB.length}`);
+                            
+                            // Load the transformed structure
+                            const transformedBlob = new Blob([transformedPDB], { type: 'text/plain' });
+                            const transformedUrl = URL.createObjectURL(transformedBlob);
+                            const transformedData = await plugin.builders.data.download({ url: transformedUrl, isBinary: false });
+                            const transformedTrajectory = await plugin.builders.structure.parseTrajectory(transformedData, aligned.file.format);
+                            const transformedStructure = await plugin.builders.structure.hierarchy.applyPreset(transformedTrajectory, 'default');
+                            URL.revokeObjectURL(transformedUrl);
+                            
+                            // Wait for structure to be added and fully processed
+                            await new Promise(resolve => setTimeout(resolve, 150));
+                            
+                            // Update the structure index mapping
+                            const updatedStructures = plugin.managers.structure.hierarchy.current.structures;
+                            let newIndex = -1;
+                            for (let j = 0; j < updatedStructures.length; j++) {
+                                if (updatedStructures[j] === transformedStructure) {
+                                    newIndex = j;
+                                    break;
+                                }
+                            }
+                            if (newIndex === -1 && updatedStructures.length > 0) {
+                                newIndex = updatedStructures.length - 1;
+                            }
+                            
+                            if (newIndex >= 0) {
+                                // Update index-to-name mapping
+                                structureIndexToName.delete(queryStructureIndex); // Remove old mapping
+                                structureIndexToName.set(newIndex, aligned.file.name);
                                 
-                                // Remove and reload with transformed coordinates
-                                await plugin.managers.structure.hierarchy.remove([queryStructure]);
-                                await new Promise(resolve => setTimeout(resolve, 50));
-                                
-                                // Create transformed PDB/CIF content
-                                // Verify transformation has non-zero translation before applying
-                                const trans = aligned.transformation.translation;
-                                if (Math.abs(trans.x) < 0.001 && Math.abs(trans.y) < 0.001 && Math.abs(trans.z) < 0.001) {
-                                    console.warn(`WARNING: Transformation translation is near zero for ${aligned.file.name}. Structures may already be aligned or transformation calculation may have failed.`);
+                                // Update alignedStructures
+                                const alignedStruct = alignedStructures.find(s => s.name === aligned.file.name);
+                                if (alignedStruct) {
+                                    alignedStruct.structure = transformedStructure;
+                                    alignedStruct.structureIndex = newIndex;
                                 }
                                 
-                                const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
-                                
-                                // Verify transformation was applied (debug)
-                                console.log(`Created transformed PDB/CIF for ${aligned.file.name}, original length: ${aligned.file.data.length}, transformed length: ${transformedPDB.length}`);
-                                
-                                // Load the transformed structure
-                                const transformedBlob = new Blob([transformedPDB], { type: 'text/plain' });
-                                const transformedUrl = URL.createObjectURL(transformedBlob);
-                                const transformedData = await plugin.builders.data.download({ url: transformedUrl, isBinary: false });
-                                const transformedTrajectory = await plugin.builders.structure.parseTrajectory(transformedData, aligned.file.format);
-                                const transformedStructure = await plugin.builders.structure.hierarchy.applyPreset(transformedTrajectory, 'default');
-                                URL.revokeObjectURL(transformedUrl);
-                                
-                                // Wait for structure to be added
-                                await new Promise(resolve => setTimeout(resolve, 100));
-                                
-                                // Update the structure index mapping
-                                const updatedStructures = plugin.managers.structure.hierarchy.current.structures;
-                                let newIndex = -1;
-                                for (let j = 0; j < updatedStructures.length; j++) {
-                                    if (updatedStructures[j] === transformedStructure) {
-                                        newIndex = j;
-                                        break;
-                                    }
-                                }
-                                if (newIndex === -1 && updatedStructures.length > 0) {
-                                    newIndex = updatedStructures.length - 1;
-                                }
-                                
-                                if (newIndex >= 0) {
-                                    structureIndexToName.set(newIndex, aligned.file.name);
-                                    
-                                    // Update alignedStructures
-                                    const alignedStruct = alignedStructures.find(s => s.name === aligned.file.name);
-                                    if (alignedStruct) {
-                                        alignedStruct.structure = transformedStructure;
-                                        alignedStruct.structureIndex = newIndex;
-                                    }
-                                }
-                                
-                                console.log(`Reloaded transformed structure ${aligned.file.name} at index ${newIndex}`);
+                                console.log(`Reloaded transformed structure ${aligned.file.name} at index ${newIndex} (was ${queryStructureIndex})`);
+                            } else {
+                                console.error(`Failed to find new index for transformed structure ${aligned.file.name}`);
                             }
                         }
                     }
@@ -6893,17 +6878,35 @@
                                 }
                             }
                             
-                            // Last resort: if we have exactly 2 structures and we know the indices, 
-                            // use the structure index from the hierarchy position
-                            if (!structureName && currentStructures.length === 2 && structureIndexToName.size === 2) {
-                                // Try to match by position in hierarchy
-                                for (let i = 0; i < currentStructures.length; i++) {
-                                    // If this structure is at index i and we have a name for it, use it
-                                    if (structureIndexToName.has(i)) {
-                                        // Check if this could be the structure by checking if it's the only one left
-                                        structureName = structureIndexToName.get(i);
-                                        console.log(`Matched structure by hierarchy position at index ${i}: ${structureName}`);
-                                        break;
+                            // Last resort: Try to match by checking structure models/units
+                            // This is more reliable than hierarchy position which can be ambiguous
+                            if (!structureName) {
+                                // Try to match by checking if the structure's models match any known structure
+                                if (structure.models && structure.models.length > 0) {
+                                    for (let i = 0; i < currentStructures.length; i++) {
+                                        const currentStruct = currentStructures[i];
+                                        if (currentStruct.models && currentStruct.models.length > 0) {
+                                            // Check if any models match
+                                            for (const structModel of structure.models) {
+                                                for (const currentModel of currentStruct.models) {
+                                                    if (structModel === currentModel) {
+                                                        structureName = structureIndexToName.get(i);
+                                                        if (!structureName) {
+                                                            const alignedStruct = alignedStructures.find(s => s.structureIndex === i);
+                                                            if (alignedStruct) {
+                                                                structureName = alignedStruct.name;
+                                                            }
+                                                        }
+                                                        if (structureName) {
+                                                            console.log(`Matched structure by model at index ${i}: ${structureName}`);
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                if (structureName) break;
+                                            }
+                                        }
+                                        if (structureName) break;
                                     }
                                 }
                             }
@@ -7149,6 +7152,8 @@
                 
                 // Process data lines
                 if (trimmedLine && !trimmedLine.startsWith('#')) {
+                    // CIF format can have variable whitespace - preserve original line structure
+                    // Try to parse coordinates while preserving the line format
                     const fields = trimmedLine.split(/\s+/).filter(f => f.length > 0);
                     if (fields.length > 0 && cartnXIdx >= 0 && cartnYIdx >= 0 && cartnZIdx >= 0 && 
                         cartnXIdx < fields.length && cartnYIdx < fields.length && cartnZIdx < fields.length) {
@@ -7171,15 +7176,19 @@
                             
                             transformedCount++;
                             
-                            // Reconstruct line (CIF uses space-separated fields)
+                            // Reconstruct line - preserve CIF format with proper spacing
+                            // Use space-separated fields (CIF format is flexible)
                             transformed.push(fields.join(' '));
                         } else {
+                            // Invalid coordinates, preserve original line
                             transformed.push(line);
                         }
                     } else {
+                        // Not an atom line or missing coordinate columns, preserve original
                         transformed.push(line);
                     }
                 } else {
+                    // Comment or empty line, preserve as-is
                     transformed.push(line);
                 }
             }

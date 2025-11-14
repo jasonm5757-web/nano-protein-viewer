@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Molstar-based Protein Visualizer</title>
     <!-- Molstar CSS -->
-    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/molstar@latest/build/viewer/molstar.css" />
+    <link rel="stylesheet" type="text/css" href="${getMediaUri('molstar.css')}" />
     <!-- Molstar JavaScript -->
-    <script src="https://cdn.jsdelivr.net/npm/molstar@latest/build/viewer/molstar.js"></script>
+    <script src="${getMediaUri('molstar.js')}"></script>
     <!-- JSZip for creating ZIP files -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
@@ -6887,22 +6887,8 @@
                             
                             console.log(`Transformation for ${aligned.file.name}: translation (${translation.x.toFixed(3)}, ${translation.y.toFixed(3)}, ${translation.z.toFixed(3)})`);
                             
-                            // Convert our transformation to Molstar's 4x4 matrix format
-                            // Molstar uses column-major 4x4 transformation matrix
-                            // [R00 R10 R20 Tx]
-                            // [R01 R11 R21 Ty]
-                            // [R02 R12 R22 Tz]
-                            // [0   0   0   1 ]
-                            const transformArray = new Float32Array([
-                                rotation[0][0], rotation[0][1], rotation[0][2], 0,
-                                rotation[1][0], rotation[1][1], rotation[1][2], 0,
-                                rotation[2][0], rotation[2][1], rotation[2][2], 0,
-                                translation.x, translation.y, translation.z, 1
-                            ]);
-                            
-                            // Apply transformation using file-based approach (remove and reload with transformed coordinates)
-                            // This is necessary because Molstar normalizes coordinates on load, so we need to transform before loading
-                            console.log(`Applying file-based transformation for ${aligned.file.name}...`);
+                            // Apply transformation using Molstar's structure transform API
+                            console.log(`Applying structure transform for ${aligned.file.name}...`);
                             
                             // Verify transformation has non-zero translation
                             const trans = aligned.transformation.translation;
@@ -6910,55 +6896,54 @@
                                 console.warn(`WARNING: Transformation translation is near zero for ${aligned.file.name}.`);
                             }
                             
-                            // Remove the untransformed structure
-                            await plugin.managers.structure.hierarchy.remove([queryStructure]);
-                            await new Promise(resolve => setTimeout(resolve, 50));
+                            // Try to apply transformation using Molstar's API
+                            const transformApplied = await applyStructureTransform(
+                                plugin, 
+                                queryStructure, 
+                                rotation, 
+                                translation,
+                                aligned.file.name
+                            );
                             
-                            // Create transformed PDB/CIF content
-                            const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
-                            
-                            // Verify transformation was applied
-                            console.log(`Created transformed PDB/CIF for ${aligned.file.name}, original length: ${aligned.file.data.length}, transformed length: ${transformedPDB.length}`);
-                            
-                            // Load the transformed structure
-                            const transformedBlob = new Blob([transformedPDB], { type: 'text/plain' });
-                            const transformedUrl = URL.createObjectURL(transformedBlob);
-                            const transformedData = await plugin.builders.data.download({ url: transformedUrl, isBinary: false });
-                            const transformedTrajectory = await plugin.builders.structure.parseTrajectory(transformedData, aligned.file.format);
-                            const transformedStructure = await plugin.builders.structure.hierarchy.applyPreset(transformedTrajectory, 'default');
-                            URL.revokeObjectURL(transformedUrl);
-                            
-                            // Wait for structure to be added and fully processed
-                            await new Promise(resolve => setTimeout(resolve, 150));
-                            
-                            // Update the structure index mapping
-                            const updatedStructures = plugin.managers.structure.hierarchy.current.structures;
-                            let newIndex = -1;
-                            for (let j = 0; j < updatedStructures.length; j++) {
-                                if (updatedStructures[j] === transformedStructure) {
-                                    newIndex = j;
-                                    break;
-                                }
-                            }
-                            if (newIndex === -1 && updatedStructures.length > 0) {
-                                newIndex = updatedStructures.length - 1;
-                            }
-                            
-                            if (newIndex >= 0) {
-                                // Update index-to-name mapping
-                                structureIndexToName.delete(queryStructureIndex); // Remove old mapping
-                                structureIndexToName.set(newIndex, aligned.file.name);
+                            if (!transformApplied) {
+                                console.warn(`Failed to apply transform via API for ${aligned.file.name}, falling back to file-based approach...`);
                                 
-                                // Update alignedStructures
-                                const alignedStruct = alignedStructures.find(s => s.name === aligned.file.name);
-                                if (alignedStruct) {
-                                    alignedStruct.structure = transformedStructure;
-                                    alignedStruct.structureIndex = newIndex;
+                                // Fallback to file-based transformation
+                                await plugin.managers.structure.hierarchy.remove([queryStructure]);
+                                await new Promise(resolve => setTimeout(resolve, 50));
+                                
+                                const transformedPDB = createTransformedPDB(aligned.file.data, aligned.transformation, aligned.file.format);
+                                const transformedBlob = new Blob([transformedPDB], { type: 'text/plain' });
+                                const transformedUrl = URL.createObjectURL(transformedBlob);
+                                const transformedData = await plugin.builders.data.download({ url: transformedUrl, isBinary: false });
+                                const transformedTrajectory = await plugin.builders.structure.parseTrajectory(transformedData, aligned.file.format);
+                                const transformedStructure = await plugin.builders.structure.hierarchy.applyPreset(transformedTrajectory, 'default');
+                                URL.revokeObjectURL(transformedUrl);
+                                
+                                await new Promise(resolve => setTimeout(resolve, 150));
+                                
+                                const updatedStructures = plugin.managers.structure.hierarchy.current.structures;
+                                let newIndex = -1;
+                                for (let j = 0; j < updatedStructures.length; j++) {
+                                    if (updatedStructures[j] === transformedStructure) {
+                                        newIndex = j;
+                                        break;
+                                    }
+                                }
+                                if (newIndex === -1 && updatedStructures.length > 0) {
+                                    newIndex = updatedStructures.length - 1;
                                 }
                                 
-                                console.log(`Reloaded transformed structure ${aligned.file.name} at index ${newIndex} (was ${queryStructureIndex})`);
-                            } else {
-                                console.error(`Failed to find new index for transformed structure ${aligned.file.name}`);
+                                if (newIndex >= 0) {
+                                    structureIndexToName.delete(queryStructureIndex);
+                                    structureIndexToName.set(newIndex, aligned.file.name);
+                                    const alignedStruct = alignedStructures.find(s => s.name === aligned.file.name);
+                                    if (alignedStruct) {
+                                        alignedStruct.structure = transformedStructure;
+                                        alignedStruct.structureIndex = newIndex;
+                                    }
+                                    console.log(`Reloaded transformed structure ${aligned.file.name} at index ${newIndex}`);
+                                }
                             }
                         }
                     }
@@ -7284,6 +7269,150 @@
             } catch (error) {
                 console.error('Error applying conservation coloring:', error);
                 console.error(error.stack);
+            }
+        }
+        
+        // Apply structure transformation using Molstar's API
+        // Returns true if successful, false if API not available (will fall back to file-based approach)
+        async function applyStructureTransform(plugin, structure, rotation, translation, structureName) {
+            try {
+                // Method 1: Try using plugin.builders.structure.transform if available
+                if (plugin.builders && plugin.builders.structure && plugin.builders.structure.transform) {
+                    console.log(`Using plugin.builders.structure.transform for ${structureName}`);
+                    
+                    // Convert rotation and translation to Molstar's transform format
+                    // Molstar uses column-major 4x4 matrix
+                    const transformMatrix = new Float32Array([
+                        rotation[0][0], rotation[1][0], rotation[2][0], 0,
+                        rotation[0][1], rotation[1][1], rotation[2][1], 0,
+                        rotation[0][2], rotation[1][2], rotation[2][2], 0,
+                        translation.x, translation.y, translation.z, 1
+                    ]);
+                    
+                    await plugin.builders.structure.transform(structure, transformMatrix);
+                    console.log(`Successfully applied transform via builders.structure.transform for ${structureName}`);
+                    return true;
+                }
+                
+                // Method 2: Try using structure component transform
+                if (structure && structure.components && structure.components.length > 0) {
+                    console.log(`Attempting to use structure component transform for ${structureName}`);
+                    
+                    // Get the first component (usually the main structure)
+                    const component = structure.components[0];
+                    
+                    // Check if component has transform property
+                    if (component && component.transform) {
+                        // Create transform matrix
+                        const transformMatrix = new Float32Array([
+                            rotation[0][0], rotation[1][0], rotation[2][0], 0,
+                            rotation[0][1], rotation[1][1], rotation[2][1], 0,
+                            rotation[0][2], rotation[1][2], rotation[2][2], 0,
+                            translation.x, translation.y, translation.z, 1
+                        ]);
+                        
+                        // Try to set transform directly
+                        if (typeof component.transform.setTransform === 'function') {
+                            component.transform.setTransform(transformMatrix);
+                            console.log(`Successfully applied transform via component.transform.setTransform for ${structureName}`);
+                            return true;
+                        }
+                        
+                        // Try updating via component manager
+                        if (plugin.managers && plugin.managers.structure && plugin.managers.structure.component) {
+                            // Update all representations with the transform
+                            const update = plugin.managers.structure.component.update(component, {
+                                transform: {
+                                    params: {
+                                        transform: transformMatrix
+                                    }
+                                }
+                            });
+                            if (update) {
+                                await update.commit();
+                                console.log(`Successfully applied transform via component manager for ${structureName}`);
+                                return true;
+                            }
+                        }
+                    }
+                }
+                
+                // Method 3: Try using cell.transform if available
+                if (structure && structure.cell && structure.cell.transform) {
+                    console.log(`Attempting to use cell.transform for ${structureName}`);
+                    
+                    // Create transform matrix (column-major)
+                    const transformMatrix = new Float32Array([
+                        rotation[0][0], rotation[1][0], rotation[2][0], 0,
+                        rotation[0][1], rotation[1][1], rotation[2][1], 0,
+                        rotation[0][2], rotation[1][2], rotation[2][2], 0,
+                        translation.x, translation.y, translation.z, 1
+                    ]);
+                    
+                    // Try to update cell transform
+                    if (structure.cell.transform.setTransform) {
+                        structure.cell.transform.setTransform(transformMatrix);
+                        console.log(`Successfully applied transform via cell.transform.setTransform for ${structureName}`);
+                        return true;
+                    }
+                    
+                    // Try updating representations with new transform
+                    if (structure.components && structure.components.length > 0) {
+                        const update = plugin.managers.structure.component.updateRepresentations(
+                            structure.components,
+                            {
+                                transform: {
+                                    params: {
+                                        transform: transformMatrix
+                                    }
+                                }
+                            }
+                        );
+                        if (update) {
+                            await update.commit();
+                            console.log(`Successfully applied transform via representation update for ${structureName}`);
+                            return true;
+                        }
+                    }
+                }
+                
+                // Method 4: Try using behavior transformers (from inspection results)
+                if (plugin.spec && plugin.spec.behaviors) {
+                    console.log(`Checking behavior transformers for ${structureName}`);
+                    
+                    // Look for transform-related behaviors
+                    for (let i = 0; i < plugin.spec.behaviors.length; i++) {
+                        const behavior = plugin.spec.behaviors[i];
+                        if (behavior && behavior.transformer) {
+                            // Try to use the transformer
+                            try {
+                                const transformMatrix = new Float32Array([
+                                    rotation[0][0], rotation[1][0], rotation[2][0], 0,
+                                    rotation[0][1], rotation[1][1], rotation[2][1], 0,
+                                    rotation[0][2], rotation[1][2], rotation[2][2], 0,
+                                    translation.x, translation.y, translation.z, 1
+                                ]);
+                                
+                                // Attempt to apply via transformer
+                                if (typeof behavior.transformer.apply === 'function') {
+                                    await behavior.transformer.apply(structure, transformMatrix);
+                                    console.log(`Successfully applied transform via behavior transformer ${i} for ${structureName}`);
+                                    return true;
+                                }
+                            } catch (e) {
+                                // Continue to next method
+                                console.log(`Behavior transformer ${i} not applicable:`, e.message);
+                            }
+                        }
+                    }
+                }
+                
+                console.log(`No suitable transform API found for ${structureName}, will use fallback`);
+                return false;
+                
+            } catch (error) {
+                console.error(`Error applying structure transform for ${structureName}:`, error);
+                return false;
             }
         }
         

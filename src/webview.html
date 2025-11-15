@@ -6881,6 +6881,10 @@
                         const queryStructure = queryStructures[i];
                         const aligned = alignmentData.aligned[i];
                         
+                        // Store the current structure index before any transformations
+                        // This is the index in the allStructures array (0 = ref, 1+ = queries)
+                        const queryStructureIndex = i + 1; // +1 because ref is at index 0
+                        
                         if (aligned && aligned.transformation) {
                             const rotation = aligned.transformation.rotation;
                             const translation = aligned.transformation.translation;
@@ -6907,6 +6911,9 @@
                             
                             if (!transformApplied) {
                                 console.warn(`Failed to apply transform via API for ${aligned.file.name}, falling back to file-based approach...`);
+                                
+                                // Store the old index mapping before removing
+                                const oldIndex = queryStructureIndex;
                                 
                                 // Fallback to file-based transformation
                                 await plugin.managers.structure.hierarchy.remove([queryStructure]);
@@ -6935,14 +6942,19 @@
                                 }
                                 
                                 if (newIndex >= 0) {
-                                    structureIndexToName.delete(queryStructureIndex);
+                                    // Update index-to-name mapping
+                                    structureIndexToName.delete(oldIndex);
                                     structureIndexToName.set(newIndex, aligned.file.name);
+                                    
+                                    // Update alignedStructures
                                     const alignedStruct = alignedStructures.find(s => s.name === aligned.file.name);
                                     if (alignedStruct) {
                                         alignedStruct.structure = transformedStructure;
                                         alignedStruct.structureIndex = newIndex;
                                     }
-                                    console.log(`Reloaded transformed structure ${aligned.file.name} at index ${newIndex}`);
+                                    console.log(`Reloaded transformed structure ${aligned.file.name} at index ${newIndex} (was ${oldIndex})`);
+                                } else {
+                                    console.error(`Failed to find new index for transformed structure ${aligned.file.name}`);
                                 }
                             }
                         }
@@ -7320,18 +7332,28 @@
                         
                         // Try updating via component manager
                         if (plugin.managers && plugin.managers.structure && plugin.managers.structure.component) {
-                            // Update all representations with the transform
-                            const update = plugin.managers.structure.component.update(component, {
-                                transform: {
-                                    params: {
-                                        transform: transformMatrix
+                            try {
+                                // Try using updateRepresentations instead of update
+                                const update = plugin.managers.structure.component.updateRepresentations(
+                                    [component],
+                                    {
+                                        transform: {
+                                            params: {
+                                                transform: transformMatrix
+                                            }
+                                        }
                                     }
+                                );
+                                if (update && typeof update.commit === 'function') {
+                                    await update.commit();
+                                    console.log(`Successfully applied transform via component manager for ${structureName}`);
+                                    return true;
+                                } else if (update) {
+                                    // Some update objects might not have commit, try direct application
+                                    console.log(`Update object returned but no commit method, trying alternative approach`);
                                 }
-                            });
-                            if (update) {
-                                await update.commit();
-                                console.log(`Successfully applied transform via component manager for ${structureName}`);
-                                return true;
+                            } catch (e) {
+                                console.log(`Component manager update failed: ${e.message}`);
                             }
                         }
                     }
@@ -7358,20 +7380,26 @@
                     
                     // Try updating representations with new transform
                     if (structure.components && structure.components.length > 0) {
-                        const update = plugin.managers.structure.component.updateRepresentations(
-                            structure.components,
-                            {
-                                transform: {
-                                    params: {
-                                        transform: transformMatrix
+                        try {
+                            const update = plugin.managers.structure.component.updateRepresentations(
+                                structure.components,
+                                {
+                                    transform: {
+                                        params: {
+                                            transform: transformMatrix
+                                        }
                                     }
                                 }
+                            );
+                            if (update && typeof update.commit === 'function') {
+                                await update.commit();
+                                console.log(`Successfully applied transform via representation update for ${structureName}`);
+                                return true;
+                            } else if (update) {
+                                console.log(`Update returned but no commit method available`);
                             }
-                        );
-                        if (update) {
-                            await update.commit();
-                            console.log(`Successfully applied transform via representation update for ${structureName}`);
-                            return true;
+                        } catch (e) {
+                            console.log(`Representation update failed: ${e.message}`);
                         }
                     }
                 }

@@ -133,9 +133,12 @@ class ProteinViewerPanel {
         // Read the webview HTML file
         const webviewPath = vscode.Uri.joinPath(this._extensionUri, 'src', 'webview.html');
         try {
-            const htmlContent = fs.readFileSync(webviewPath.fsPath, 'utf8');
-            // Replace any relative paths with webview URIs if needed
-            // For now, we're using CDN links so this might not be necessary
+            let htmlContent = fs.readFileSync(webviewPath.fsPath, 'utf8');
+            // Replace placeholders with webview URIs for Molstar files
+            const molstarCssUri = this._panel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'molstar.css'));
+            const molstarJsUri = this._panel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'molstar.js'));
+            htmlContent = htmlContent.replace(/\$\{getMediaUri\('molstar\.css'\)\}/g, molstarCssUri.toString());
+            htmlContent = htmlContent.replace(/\$\{getMediaUri\('molstar\.js'\)\}/g, molstarJsUri.toString());
             return htmlContent;
         }
         catch (error) {
